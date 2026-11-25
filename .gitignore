@@ -3,3 +3,4 @@ leads.json
 config/
 audit.log
 data/
+*.exe
