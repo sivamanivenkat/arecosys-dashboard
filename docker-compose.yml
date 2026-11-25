@@ -1,0 +1,37 @@
+# Dashboard behind Caddy, which obtains and renews the HTTPS certificate.
+# 1. Copy .env.example to .env and fill in the values.
+# 2. Point DASHBOARD_DOMAIN's DNS record at this host (ports 80 and 443 open).
+# 3. docker compose up -d --build
+services:
+  dashboard:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ARECOSYS_TRUST_PROXY: "1"
+      ARECOSYS_AUDIT_FILE: /data/audit.log
+    volumes:
+      - leads:/data
+      - ./config:/config:ro
+    expose:
+      - "8765"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - dashboard
+    environment:
+      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:?set DASHBOARD_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  leads:
+  caddy_data:
+  caddy_config:
