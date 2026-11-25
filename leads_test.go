@@ -11,20 +11,20 @@ import (
 	"testing"
 )
 
-func newStore(t *testing.T) *leadStore {
+func newStore(t *testing.T) *LeadStore {
 	t.Helper()
 	t.Setenv("ARECOSYS_LEAD_TOKEN", "secret")
-	return &leadStore{path: filepath.Join(t.TempDir(), "leads.json"), rows: []lead{}}
+	return &LeadStore{Path: filepath.Join(t.TempDir(), "leads.json"), Rows: []Lead{}}
 }
 
-func postLead(store *leadStore, token, body string) *httptest.ResponseRecorder {
+func postLead(store *LeadStore, token, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, "/api/leads", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		r.Header.Set("Authorization", "Bearer "+token)
 	}
 	w := httptest.NewRecorder()
-	store.ingest(w, r)
+	store.Ingest(w, r)
 	return w
 }
 
@@ -51,8 +51,8 @@ func TestIngestValidatesAndDeduplicates(t *testing.T) {
 			t.Fatalf("submit %d: status %d", i, w.Code)
 		}
 	}
-	if len(store.rows) != 1 || store.rows[0].Status != "New" || store.rows[0].Source != "Website" {
-		t.Fatalf("unexpected rows: %+v", store.rows)
+	if len(store.Rows) != 1 || store.Rows[0].Status != "New" || store.Rows[0].Source != "Website" {
+		t.Fatalf("unexpected rows: %+v", store.Rows)
 	}
 }
 
@@ -61,7 +61,7 @@ func TestUpdateStage(t *testing.T) {
 	postLead(store, "secret", `{"id":"x1","email":"a@example.test"}`)
 	patch := func(id, body string) int {
 		mux := http.NewServeMux()
-		mux.HandleFunc("PATCH /api/leads/{id}", store.update)
+		mux.HandleFunc("PATCH /api/leads/{id}", store.Update)
 		r := httptest.NewRequest(http.MethodPatch, "/api/leads/"+id, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -71,14 +71,14 @@ func TestUpdateStage(t *testing.T) {
 	if c := patch("x1", `{"status":"Qualified"}`); c != http.StatusNoContent {
 		t.Fatalf("valid stage: %d", c)
 	}
-	if store.rows[0].Status != "Qualified" {
-		t.Errorf("stage not saved: %s", store.rows[0].Status)
+	if store.Rows[0].Status != "Qualified" {
+		t.Errorf("stage not saved: %s", store.Rows[0].Status)
 	}
-	if store.rows[0].Responded == "" {
+	if store.Rows[0].Responded == "" {
 		t.Error("moving out of New should record the first response")
 	}
-	if c := patch("x1", `{"assignee":"  Meera  "}`); c != http.StatusNoContent || store.rows[0].Assignee != "Meera" {
-		t.Errorf("assignee update: %d %q", c, store.rows[0].Assignee)
+	if c := patch("x1", `{"assignee":"  Meera  "}`); c != http.StatusNoContent || store.Rows[0].Assignee != "Meera" {
+		t.Errorf("assignee update: %d %q", c, store.Rows[0].Assignee)
 	}
 	if c := patch("x1", `{}`); c != http.StatusBadRequest {
 		t.Errorf("empty update: %d", c)
@@ -108,17 +108,17 @@ func TestLeadTimelineAndPhone(t *testing.T) {
 	if w := postLead(store, "secret", `{"id":"w2","email":"a@example.test","assignee":"Eve","responded":"2020-01-01T00:00:00Z"}`); w.Code != http.StatusOK {
 		t.Errorf("lead with server fields: %d", w.Code)
 	}
-	if got := store.rows[0]; got.ID != "w2" || got.Assignee != "" || got.Responded != "" {
+	if got := store.Rows[0]; got.ID != "w2" || got.Assignee != "" || got.Responded != "" {
 		t.Errorf("submitter must not set server-managed fields: %+v", got)
 	}
-	row := store.rows[1]
+	row := store.Rows[1]
 	if row.Name != "+91 98765 43210" || len(row.Activity) != 1 || row.Activity[0].Text != "Received via WhatsApp" {
 		t.Fatalf("stored lead: %+v", row)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("PATCH /api/leads/{id}", store.update)
+	mux.HandleFunc("PATCH /api/leads/{id}", store.Update)
 	patch := func(body string) int {
-		r := withAccount(httptest.NewRequest(http.MethodPatch, "/api/leads/w1", strings.NewReader(body)), account{Name: "meera", Role: "editor"})
+		r := WithAccount(httptest.NewRequest(http.MethodPatch, "/api/leads/w1", strings.NewReader(body)), Account{Name: "meera", Role: "editor"})
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)
@@ -128,7 +128,7 @@ func TestLeadTimelineAndPhone(t *testing.T) {
 		t.Fatalf("update: %d", c)
 	}
 	texts := []string{}
-	for _, entry := range store.rows[1].Activity {
+	for _, entry := range store.Rows[1].Activity {
 		texts = append(texts, entry.By+": "+entry.Text)
 	}
 	want := []string{"system: Received via WhatsApp", "meera: Stage: New to Contacted", "meera: Assigned to Meera", "meera: Called, sending quote"}
@@ -153,7 +153,7 @@ func TestWhatsAppWebhook(t *testing.T) {
 		}
 		r.Header.Set("X-Hub-Signature-256", signature)
 		w := httptest.NewRecorder()
-		store.whatsapp(w, r)
+		store.WhatsApp(w, r)
 		return w.Code
 	}
 	message := func(id, text string) string {
@@ -162,7 +162,7 @@ func TestWhatsAppWebhook(t *testing.T) {
 	if c := send(message("m1", "Hi"), "sha256=bad"); c != http.StatusUnauthorized {
 		t.Errorf("bad signature: %d", c)
 	}
-	if len(store.rows) != 0 {
+	if len(store.Rows) != 0 {
 		t.Fatal("unsigned payload created a lead")
 	}
 	if c := send(message("m1", "Do you cover Ward 4?"), ""); c != http.StatusOK {
@@ -170,20 +170,20 @@ func TestWhatsAppWebhook(t *testing.T) {
 	}
 	send(message("m1", "Do you cover Ward 4?"), "") // Meta retries deliveries
 	send(message("m2", "Also EV pricing please"), "")
-	if len(store.rows) != 1 {
-		t.Fatalf("one conversation should be one lead, got %d", len(store.rows))
+	if len(store.Rows) != 1 {
+		t.Fatalf("one conversation should be one lead, got %d", len(store.Rows))
 	}
-	row := store.rows[0]
+	row := store.Rows[0]
 	if row.Name != "Priya" || row.Phone != "+919876543210" || row.Source != "WhatsApp" || len(row.Activity) != 2 || row.Activity[1].Text != "Also EV pricing please" {
 		t.Errorf("lead: %+v", row)
 	}
 	verify := httptest.NewRecorder()
-	store.whatsapp(verify, httptest.NewRequest(http.MethodGet, "/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=verify&hub.challenge=12345", nil))
+	store.WhatsApp(verify, httptest.NewRequest(http.MethodGet, "/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=verify&hub.challenge=12345", nil))
 	if verify.Code != http.StatusOK || verify.Body.String() != "12345" {
 		t.Errorf("verification handshake: %d %q", verify.Code, verify.Body.String())
 	}
 	wrong := httptest.NewRecorder()
-	store.whatsapp(wrong, httptest.NewRequest(http.MethodGet, "/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=nope&hub.challenge=1", nil))
+	store.WhatsApp(wrong, httptest.NewRequest(http.MethodGet, "/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=nope&hub.challenge=1", nil))
 	if wrong.Code != http.StatusForbidden {
 		t.Errorf("wrong verify token: %d", wrong.Code)
 	}

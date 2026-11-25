@@ -37,20 +37,20 @@ type waPayload struct {
 	} `json:"entry"`
 }
 
-func whatsappConfigured() bool {
+func WhatsAppConfigured() bool {
 	return os.Getenv("ARECOSYS_WHATSAPP_VERIFY_TOKEN") != "" && os.Getenv("ARECOSYS_WHATSAPP_APP_SECRET") != ""
 }
 
-// whatsapp handles the WhatsApp Cloud API webhook. GET answers Meta's verification
+// WhatsApp handles the WhatsApp Cloud API webhook. GET answers Meta's verification
 // handshake. POST must carry a valid X-Hub-Signature-256 over the raw body.
-func (s *leadStore) whatsapp(w http.ResponseWriter, r *http.Request) {
-	if s.path == "" || !whatsappConfigured() {
+func (s *LeadStore) WhatsApp(w http.ResponseWriter, r *http.Request) {
+	if s.Path == "" || !WhatsAppConfigured() {
 		http.NotFound(w, r)
 		return
 	}
 	if r.Method == http.MethodGet {
 		query := r.URL.Query()
-		if query.Get("hub.mode") == "subscribe" && same(query.Get("hub.verify_token"), os.Getenv("ARECOSYS_WHATSAPP_VERIFY_TOKEN")) {
+		if query.Get("hub.mode") == "subscribe" && Same(query.Get("hub.verify_token"), os.Getenv("ARECOSYS_WHATSAPP_VERIFY_TOKEN")) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			io.WriteString(w, query.Get("hub.challenge"))
 			return
@@ -101,7 +101,7 @@ func (s *leadStore) whatsapp(w http.ResponseWriter, r *http.Request) {
 
 // whatsappMessage adds a message to the sender's open lead, or opens a new lead. Meta
 // retries deliveries, so a message ID that was already recorded is ignored.
-func (s *leadStore) whatsappMessage(from, name, messageID, text string) error {
+func (s *LeadStore) whatsappMessage(from, name, messageID, text string) error {
 	phone := "+" + from
 	if !phonePattern.MatchString(phone) || messageID == "" || len(messageID) > 160 {
 		return nil
@@ -110,9 +110,9 @@ func (s *leadStore) whatsappMessage(from, name, messageID, text string) error {
 		text = text[:4000]
 	}
 	now := time.Now().Format(time.RFC3339)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rows := append([]lead{}, s.rows...)
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	rows := append([]Lead{}, s.Rows...)
 	for i, row := range rows {
 		for _, entry := range row.Activity {
 			if entry.Ref == messageID {
@@ -120,14 +120,14 @@ func (s *leadStore) whatsappMessage(from, name, messageID, text string) error {
 			}
 		}
 		if row.Phone == phone && row.Status != "Closed" {
-			rows[i].Activity = append(append([]activity{}, row.Activity...), activity{At: now, By: "WhatsApp", Text: text, Ref: messageID})
+			rows[i].Activity = append(append([]Activity{}, row.Activity...), Activity{At: now, By: "WhatsApp", Text: text, Ref: messageID})
 			return s.save(rows)
 		}
 	}
 	if name == "" {
 		name = phone
 	}
-	item := lead{ID: "wa-" + messageID, Name: name, Phone: phone, Source: "WhatsApp", Status: "New", Note: text, Created: now,
-		Activity: []activity{{At: now, By: "system", Text: "Received via WhatsApp", Ref: messageID}}}
-	return s.save(append([]lead{item}, rows...))
+	item := Lead{ID: "wa-" + messageID, Name: name, Phone: phone, Source: "WhatsApp", Status: "New", Note: text, Created: now,
+		Activity: []Activity{{At: now, By: "system", Text: "Received via WhatsApp", Ref: messageID}}}
+	return s.save(append([]Lead{item}, rows...))
 }

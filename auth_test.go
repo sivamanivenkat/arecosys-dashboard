@@ -27,10 +27,10 @@ func TestPasswordHashRoundTrip(t *testing.T) {
 
 func usersFile(t *testing.T) string {
 	t.Helper()
-	list := []account{}
+	list := []Account{}
 	for _, name := range []string{"viewer", "editor", "admin"} {
 		hash, _ := hashPassword(name + "-password")
-		list = append(list, account{Name: name, Role: name, Hash: hash})
+		list = append(list, Account{Name: name, Role: name, Hash: hash})
 	}
 	raw, _ := json.Marshal(list)
 	path := filepath.Join(t.TempDir(), "users.json")
@@ -41,7 +41,7 @@ func usersFile(t *testing.T) string {
 }
 
 func TestAuthorityAccounts(t *testing.T) {
-	a, err := newAuthority("shared-secret", usersFile(t))
+	a, err := NewAuthority("shared-secret", usersFile(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,20 +59,20 @@ func TestAuthorityAccounts(t *testing.T) {
 	}
 	bad := filepath.Join(t.TempDir(), "bad.json")
 	os.WriteFile(bad, []byte(`[{"name":"x","role":"root","hash":"a$b$c$d"}]`), 0o600)
-	if _, err := newAuthority("", bad); err == nil {
+	if _, err := NewAuthority("", bad); err == nil {
 		t.Error("users file with an unknown role was accepted")
 	}
 }
 
 func TestSignInRateLimit(t *testing.T) {
-	a, _ := newAuthority("shared-secret", "")
-	audit := newAuditLog("")
+	a, _ := NewAuthority("shared-secret", "")
+	audit := NewAuditLog("")
 	attempt := func(password string) int {
 		r := httptest.NewRequest("GET", "/", nil)
 		r.RemoteAddr = "203.0.113.9:5555"
 		r.SetBasicAuth("arecosys", password)
 		w := httptest.NewRecorder()
-		a.require(w, r, audit)
+		a.Require(w, r, audit)
 		return w.Code
 	}
 	for i := 0; i < failureLimit; i++ {
@@ -86,7 +86,7 @@ func TestSignInRateLimit(t *testing.T) {
 	other := httptest.NewRequest("GET", "/", nil)
 	other.RemoteAddr = "198.51.100.1:1"
 	other.SetBasicAuth("arecosys", "shared-secret")
-	if _, ok := a.require(httptest.NewRecorder(), other, audit); !ok {
+	if _, ok := a.Require(httptest.NewRecorder(), other, audit); !ok {
 		t.Error("a different client must not be locked out")
 	}
 	if len(audit.recent) != failureLimit {
@@ -95,24 +95,24 @@ func TestSignInRateLimit(t *testing.T) {
 }
 
 func TestForwardedAddressOnlyWhenTrusted(t *testing.T) {
-	a := &authority{}
+	a := &Authority{}
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "10.0.0.2:1"
 	r.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
-	if got := a.clientIP(r); got != "10.0.0.2" {
+	if got := a.ClientIP(r); got != "10.0.0.2" {
 		t.Errorf("untrusted proxy header used: %s", got)
 	}
 	a.trustProxy = true
-	if got := a.clientIP(r); got != "5.6.7.8" {
+	if got := a.ClientIP(r); got != "5.6.7.8" {
 		t.Errorf("trusted proxy address: %s", got)
 	}
 }
 
 func TestAuditLogPersistsAndOmitsQuery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.log")
-	log := newAuditLog(path)
-	log.add(auditEntry{User: "editor", Method: "PATCH", Path: "/api/leads/x", Status: 204})
-	reopened := newAuditLog(path)
+	log := NewAuditLog(path)
+	log.Add(AuditEntry{User: "editor", Method: "PATCH", Path: "/api/leads/x", Status: 204})
+	reopened := NewAuditLog(path)
 	if len(reopened.recent) != 1 || reopened.recent[0].User != "editor" || reopened.recent[0].At == "" {
 		t.Fatalf("entries after restart: %+v", reopened.recent)
 	}
@@ -124,21 +124,21 @@ func TestAuditLogPersistsAndOmitsQuery(t *testing.T) {
 
 func TestRolesGateActions(t *testing.T) {
 	admin := httptest.NewRequest("GET", "/", nil)
-	editor := withAccount(httptest.NewRequest("GET", "/", nil), account{Name: "e", Role: "editor"})
-	if requireAdmin(httptest.NewRecorder(), editor) {
+	editor := WithAccount(httptest.NewRequest("GET", "/", nil), Account{Name: "e", Role: "editor"})
+	if RequireAdmin(httptest.NewRecorder(), editor) {
 		t.Error("editor passed an admin check")
 	}
-	if !requireAdmin(httptest.NewRecorder(), withAccount(admin, account{Name: "a", Role: "admin"})) {
+	if !RequireAdmin(httptest.NewRecorder(), WithAccount(admin, Account{Name: "a", Role: "admin"})) {
 		t.Error("admin failed an admin check")
 	}
 }
 
 func TestUsersFileWithByteOrderMark(t *testing.T) {
 	hash, _ := hashPassword("some-long-password")
-	raw, _ := json.Marshal([]account{{Name: "ann", Role: "editor", Hash: hash}})
+	raw, _ := json.Marshal([]Account{{Name: "ann", Role: "editor", Hash: hash}})
 	path := filepath.Join(t.TempDir(), "users.json")
 	os.WriteFile(path, append([]byte("\xef\xbb\xbf"), raw...), 0o600)
-	a, err := newAuthority("", path)
+	a, err := NewAuthority("", path)
 	if err != nil {
 		t.Fatal(err)
 	}

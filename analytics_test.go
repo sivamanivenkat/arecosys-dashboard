@@ -66,11 +66,11 @@ func TestGA4Source(t *testing.T) {
 		}
 	}))
 	defer fake.Close()
-	oldToken, oldData := ga4TokenURL, ga4DataURL
-	ga4TokenURL, ga4DataURL = fake.URL+"/token", fake.URL+"/"
-	defer func() { ga4TokenURL, ga4DataURL = oldToken, oldData }()
+	oldToken, oldData := GA4TokenURL, GA4DataURL
+	GA4TokenURL, GA4DataURL = fake.URL+"/token", fake.URL+"/"
+	defer func() { GA4TokenURL, GA4DataURL = oldToken, oldData }()
 
-	result := upstream(t.Context(), "website", "30")
+	result := Fetch(t.Context(), "website", "30")
 	if result.State != "live" {
 		t.Fatalf("state %s", result.State)
 	}
@@ -88,7 +88,7 @@ func TestGA4Source(t *testing.T) {
 	if channels["organic"] != 42 || channels["direct"] != 30 || channels["social"] != 0 {
 		t.Errorf("channels: %v", channels)
 	}
-	var inquiries []point
+	var inquiries []Point
 	get("inquiries", &inquiries)
 	if len(inquiries) != 2 || inquiries[0].Label != "Nov 23" || inquiries[0].Value != 3 || inquiries[1].Value != 5 {
 		t.Errorf("inquiries: %+v", inquiries)
@@ -132,12 +132,12 @@ func TestInstagramInsightsSource(t *testing.T) {
 		}
 	}))
 	defer fake.Close()
-	old := igGraph
-	igGraph = fake.URL + "/"
-	defer func() { igGraph = old }()
+	old := Graph
+	Graph = fake.URL + "/"
+	defer func() { Graph = old }()
 
 	read := func(days string) map[string]any {
-		result := upstream(t.Context(), "instagram", days)
+		result := Fetch(t.Context(), "instagram", days)
 		if result.State != "live" {
 			t.Fatalf("days %s: state %s", days, result.State)
 		}
@@ -163,7 +163,7 @@ func TestInstagramInsightsSource(t *testing.T) {
 	if long := read("90"); long["reach"] != nil || long["engagements"] != nil {
 		t.Errorf("refused period totals must stay empty, not be guessed: %v", long)
 	}
-	if upstream(t.Context(), "instagram", "30").State != "error" {
+	if Fetch(t.Context(), "instagram", "30").State != "error" {
 		t.Error("a failing 30-day total must surface as an error")
 	}
 }

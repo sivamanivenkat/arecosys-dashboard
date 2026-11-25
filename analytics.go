@@ -26,18 +26,18 @@ import (
 // website (Google Analytics 4) and Instagram (Insights) so no separate adapter is needed.
 
 var (
-	ga4TokenURL = "https://oauth2.googleapis.com/token"
-	ga4DataURL  = "https://analyticsdata.googleapis.com/v1beta/"
+	GA4TokenURL = "https://oauth2.googleapis.com/token"
+	GA4DataURL  = "https://analyticsdata.googleapis.com/v1beta/"
 	ga4Property = regexp.MustCompile(`^[0-9]{1,20}$`)
 	ga4EventRe  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,39}$`)
 )
 
-func ga4Configured() bool {
+func GA4Configured() bool {
 	return ga4Property.MatchString(os.Getenv("ARECOSYS_GA4_PROPERTY_ID")) && os.Getenv("ARECOSYS_GA4_CREDENTIALS_FILE") != ""
 }
 
-func igInsightsConfigured() bool {
-	return os.Getenv("ARECOSYS_INSTAGRAM_INSIGHTS") == "1" && igNumeric.MatchString(os.Getenv("ARECOSYS_INSTAGRAM_USER_ID")) && os.Getenv("ARECOSYS_INSTAGRAM_ACCESS_TOKEN") != ""
+func InsightsConfigured() bool {
+	return os.Getenv("ARECOSYS_INSTAGRAM_INSIGHTS") == "1" && Numeric.MatchString(os.Getenv("ARECOSYS_INSTAGRAM_USER_ID")) && os.Getenv("ARECOSYS_INSTAGRAM_ACCESS_TOKEN") != ""
 }
 
 func rawMap(values map[string]any) map[string]json.RawMessage {
@@ -48,7 +48,7 @@ func rawMap(values map[string]any) map[string]json.RawMessage {
 	return out
 }
 
-type point struct {
+type Point struct {
 	Label string  `json:"label"`
 	Value float64 `json:"value"`
 }
@@ -89,7 +89,7 @@ func ga4Token(ctx context.Context) (string, error) {
 		return "", errors.New("service account key is not an RSA key")
 	}
 	now := time.Now()
-	claims, _ := json.Marshal(map[string]any{"iss": creds.ClientEmail, "scope": "https://www.googleapis.com/auth/analytics.readonly", "aud": ga4TokenURL, "iat": now.Unix(), "exp": now.Add(time.Hour).Unix()})
+	claims, _ := json.Marshal(map[string]any{"iss": creds.ClientEmail, "scope": "https://www.googleapis.com/auth/analytics.readonly", "aud": GA4TokenURL, "iat": now.Unix(), "exp": now.Add(time.Hour).Unix()})
 	signing := b64url([]byte(`{"alg":"RS256","typ":"JWT"}`)) + "." + b64url(claims)
 	digest := sha256.Sum256([]byte(signing))
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
@@ -97,7 +97,7 @@ func ga4Token(ctx context.Context) (string, error) {
 		return "", err
 	}
 	form := url.Values{"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"}, "assertion": {signing + "." + b64url(signature)}}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, ga4TokenURL, strings.NewReader(form.Encode()))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, GA4TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
 	}
@@ -106,7 +106,7 @@ func ga4Token(ctx context.Context) (string, error) {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int    `json:"expires_in"`
 	}
-	if err := requestJSON(request, &result); err != nil || result.AccessToken == "" {
+	if err := RequestJSON(request, &result); err != nil || result.AccessToken == "" {
 		return "", errors.New("Google rejected the service account")
 	}
 	ga4Cache.token = result.AccessToken
@@ -136,10 +136,10 @@ func (r ga4Report) dimension(row, index int) string {
 	return r.Rows[row].DimensionValues[index].Value
 }
 
-func ga4Source(ctx context.Context, days string) source {
+func GA4Source(ctx context.Context, days string) Source {
 	token, err := ga4Token(ctx)
 	if err != nil {
-		return source{State: "error"}
+		return Source{State: "error"}
 	}
 	leadEvent := os.Getenv("ARECOSYS_GA4_LEAD_EVENT")
 	if leadEvent == "" {
@@ -152,7 +152,7 @@ func ga4Source(ctx context.Context, days string) source {
 		}
 	}
 	if !ga4EventRe.MatchString(leadEvent) {
-		return source{State: "error"}
+		return Source{State: "error"}
 	}
 	rng := []map[string]string{{"startDate": days + "daysAgo", "endDate": "today"}}
 	byDate := []map[string]any{{"dimension": map[string]string{"dimensionName": "date"}}}
@@ -164,17 +164,17 @@ func ga4Source(ctx context.Context, days string) source {
 		{"dateRanges": rng, "dimensions": []map[string]string{{"name": "date"}, {"name": "eventName"}}, "metrics": []map[string]string{{"name": "eventCount"}}, "dimensionFilter": map[string]any{"filter": map[string]any{"fieldName": "eventName", "inListFilter": map[string]any{"values": events}}}, "orderBys": byDate},
 	}
 	body, _ := json.Marshal(map[string]any{"requests": requests})
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, ga4DataURL+"properties/"+os.Getenv("ARECOSYS_GA4_PROPERTY_ID")+":batchRunReports", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, GA4DataURL+"properties/"+os.Getenv("ARECOSYS_GA4_PROPERTY_ID")+":batchRunReports", bytes.NewReader(body))
 	if err != nil {
-		return source{State: "error"}
+		return Source{State: "error"}
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Content-Type", "application/json")
 	var result struct {
 		Reports []ga4Report `json:"reports"`
 	}
-	if err := requestJSON(request, &result); err != nil || len(result.Reports) != 5 {
-		return source{State: "error"}
+	if err := RequestJSON(request, &result); err != nil || len(result.Reports) != 5 {
+		return Source{State: "error"}
 	}
 	totals, daily, channelRows, pageRows, eventRows := result.Reports[0], result.Reports[1], result.Reports[2], result.Reports[3], result.Reports[4]
 	label := func(date string) string {
@@ -183,14 +183,14 @@ func ga4Source(ctx context.Context, days string) source {
 		}
 		return date
 	}
-	traffic, labels := []point{}, map[string]int{}
+	traffic, labels := []Point{}, map[string]int{}
 	for i := range daily.Rows {
 		labels[daily.dimension(i, 0)] = i
-		traffic = append(traffic, point{label(daily.dimension(i, 0)), daily.number(i, 0)})
+		traffic = append(traffic, Point{label(daily.dimension(i, 0)), daily.number(i, 0)})
 	}
-	inquiries, actionTotals, leads := make([]point, len(traffic)), map[string]float64{}, 0.0
+	inquiries, actionTotals, leads := make([]Point, len(traffic)), map[string]float64{}, 0.0
 	for i := range traffic {
-		inquiries[i] = point{Label: traffic[i].Label}
+		inquiries[i] = Point{Label: traffic[i].Label}
 	}
 	for i := range eventRows.Rows {
 		count, name := eventRows.number(i, 0), eventRows.dimension(i, 1)
@@ -225,7 +225,7 @@ func ga4Source(ctx context.Context, days string) source {
 		}
 		pages = append(pages, map[string]any{"name": name, "path": pageRows.dimension(i, 0), "views": pageRows.number(i, 0)})
 	}
-	return source{State: "live", Data: rawMap(map[string]any{"sessions": sessions, "pageviews": totals.number(0, 1), "leads": leads, "traffic": traffic, "inquiries": inquiries, "channels": shares, "pages": pages, "actions": actions})}
+	return Source{State: "live", Data: rawMap(map[string]any{"sessions": sessions, "pageviews": totals.number(0, 1), "leads": leads, "traffic": traffic, "inquiries": inquiries, "channels": shares, "pages": pages, "actions": actions})}
 }
 
 type igSeries struct {
@@ -241,13 +241,13 @@ type igSeries struct {
 	} `json:"data"`
 }
 
-// igInsightsSource builds the Instagram source from the Insights API. Unique reach for
+// InsightsSource builds the Instagram source from the Insights API. Unique reach for
 // a whole period comes from the API's period total, never from summing daily reach.
-func igInsightsSource(ctx context.Context, days string) source {
+func InsightsSource(ctx context.Context, days string) Source {
 	count, _ := strconv.Atoi(days)
 	user := os.Getenv("ARECOSYS_INSTAGRAM_USER_ID")
 	end := time.Now()
-	series := []point{}
+	series := []Point{}
 	for chunkEnd := end; chunkEnd.After(end.AddDate(0, 0, -count)); {
 		chunkStart := chunkEnd.AddDate(0, 0, -30)
 		if limit := end.AddDate(0, 0, -count); chunkStart.Before(limit) {
@@ -255,17 +255,17 @@ func igInsightsSource(ctx context.Context, days string) source {
 		}
 		var chunk igSeries
 		values := url.Values{"metric": {"reach"}, "period": {"day"}, "since": {strconv.FormatInt(chunkStart.Unix(), 10)}, "until": {strconv.FormatInt(chunkEnd.Unix(), 10)}}
-		if err := igCall(ctx, http.MethodGet, user+"/insights", values, &chunk); err != nil {
-			return source{State: "error"}
+		if err := Call(ctx, http.MethodGet, user+"/insights", values, &chunk); err != nil {
+			return Source{State: "error"}
 		}
-		part := []point{}
+		part := []Point{}
 		for _, metric := range chunk.Data {
 			for _, value := range metric.Values {
 				name := value.EndTime
 				if parsed, err := time.Parse("2006-01-02T15:04:05-0700", value.EndTime); err == nil {
 					name = parsed.Format("Jan 2")
 				}
-				part = append(part, point{name, value.Value})
+				part = append(part, Point{name, value.Value})
 			}
 		}
 		series = append(part, series...)
@@ -274,9 +274,9 @@ func igInsightsSource(ctx context.Context, days string) source {
 	out := map[string]any{"reach": nil, "engagements": nil, "profileVisits": nil, "followers": nil, "series": series}
 	var totals igSeries
 	values := url.Values{"metric": {"reach,total_interactions,profile_views"}, "metric_type": {"total_value"}, "period": {"day"}, "since": {strconv.FormatInt(end.AddDate(0, 0, -count).Unix(), 10)}, "until": {strconv.FormatInt(end.Unix(), 10)}}
-	if err := igCall(ctx, http.MethodGet, user+"/insights", values, &totals); err != nil {
+	if err := Call(ctx, http.MethodGet, user+"/insights", values, &totals); err != nil {
 		if count <= 30 {
-			return source{State: "error"}
+			return Source{State: "error"}
 		} // Long periods may be refused for period totals. Leave them empty rather than guess.
 	} else {
 		for _, metric := range totals.Data {
@@ -293,8 +293,8 @@ func igInsightsSource(ctx context.Context, days string) source {
 	var profile struct {
 		Followers *float64 `json:"followers_count"`
 	}
-	if err := igCall(ctx, http.MethodGet, user, url.Values{"fields": {"followers_count"}}, &profile); err == nil && profile.Followers != nil {
+	if err := Call(ctx, http.MethodGet, user, url.Values{"fields": {"followers_count"}}, &profile); err == nil && profile.Followers != nil {
 		out["followers"] = *profile.Followers
 	}
-	return source{State: "live", Data: rawMap(out)}
+	return Source{State: "live", Data: rawMap(out)}
 }

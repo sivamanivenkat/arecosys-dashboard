@@ -18,18 +18,18 @@ import (
 
 var phonePattern = regexp.MustCompile(`^\+?[0-9][0-9 ()-]{5,19}$`)
 
-type leadStore struct {
-	mu   sync.Mutex
-	path string
-	rows []lead
+type LeadStore struct {
+	Mu   sync.Mutex
+	Path string
+	Rows []Lead
 }
 
-func (s *leadStore) save(rows []lead) error {
+func (s *LeadStore) save(rows []Lead) error {
 	data, err := json.Marshal(rows)
 	if err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(s.path), ".leads-*")
+	temp, err := os.CreateTemp(filepath.Dir(s.Path), ".leads-*")
 	if err != nil {
 		return err
 	}
@@ -38,40 +38,40 @@ func (s *leadStore) save(rows []lead) error {
 	if err := errors.Join(writeErr, temp.Close()); err != nil {
 		return err
 	}
-	if err := os.Rename(temp.Name(), s.path); err != nil {
+	if err := os.Rename(temp.Name(), s.Path); err != nil {
 		return err
 	}
-	s.rows = rows
+	s.Rows = rows
 	return nil
 }
 
 // addLead stores a validated lead. A repeated ID returns the stored lead unchanged, so
 // retries from the website or a webhook never create duplicates.
-func (s *leadStore) addLead(item lead) (lead, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, existing := range s.rows {
+func (s *LeadStore) addLead(item Lead) (Lead, error) {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	for _, existing := range s.Rows {
 		if item.ID == existing.ID {
 			return existing, nil
 		}
 	}
 	item.Status = "New"
 	item.Created = time.Now().Format(time.RFC3339)
-	item.Activity = []activity{{At: item.Created, By: "system", Text: "Received via " + item.Source}}
-	if err := s.save(append([]lead{item}, s.rows...)); err != nil {
-		return lead{}, err
+	item.Activity = []Activity{{At: item.Created, By: "system", Text: "Received via " + item.Source}}
+	if err := s.save(append([]Lead{item}, s.Rows...)); err != nil {
+		return Lead{}, err
 	}
 	return item, nil
 }
 
-func (s *leadStore) ingest(w http.ResponseWriter, r *http.Request) {
+func (s *LeadStore) Ingest(w http.ResponseWriter, r *http.Request) {
 	secret := os.Getenv("ARECOSYS_LEAD_TOKEN")
-	if s.path == "" || secret == "" || !same(r.Header.Get("Authorization"), "Bearer "+secret) {
+	if s.Path == "" || secret == "" || !Same(r.Header.Get("Authorization"), "Bearer "+secret) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	var item lead
-	if !readJSON(w, r, &item) {
+	var item Lead
+	if !ReadJSON(w, r, &item) {
 		return
 	}
 	item.Email = strings.TrimSpace(item.Email)
@@ -113,16 +113,16 @@ func (s *leadStore) ingest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "lead could not be saved", http.StatusInternalServerError)
 		return
 	}
-	jsonResponse(w, saved)
+	JSONResponse(w, saved)
 }
 
-func (s *leadStore) update(w http.ResponseWriter, r *http.Request) {
+func (s *LeadStore) Update(w http.ResponseWriter, r *http.Request) {
 	var item struct {
 		Status   *string `json:"status"`
 		Assignee *string `json:"assignee"`
 		Note     *string `json:"note"`
 	}
-	if !readJSON(w, r, &item) {
+	if !ReadJSON(w, r, &item) {
 		return
 	}
 	if item.Status == nil && item.Assignee == nil && item.Note == nil {
@@ -153,21 +153,21 @@ func (s *leadStore) update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	who := currentAccount(r).Name
+	who := CurrentAccount(r).Name
 	if who == "" {
 		who = "system"
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, row := range s.rows {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	for i, row := range s.Rows {
 		if row.ID != r.PathValue("id") {
 			continue
 		}
-		rows := append([]lead{}, s.rows...)
+		rows := append([]Lead{}, s.Rows...)
 		now := time.Now().Format(time.RFC3339)
 		entries := slices.Clone(row.Activity)
 		if item.Status != nil && *item.Status != row.Status {
-			entries = append(entries, activity{At: now, By: who, Text: "Stage: " + row.Status + " to " + *item.Status})
+			entries = append(entries, Activity{At: now, By: who, Text: "Stage: " + row.Status + " to " + *item.Status})
 		}
 		if item.Status != nil {
 			rows[i].Status = *item.Status
@@ -181,11 +181,11 @@ func (s *leadStore) update(w http.ResponseWriter, r *http.Request) {
 			if *item.Assignee == "" {
 				text = "Unassigned"
 			}
-			entries = append(entries, activity{At: now, By: who, Text: text})
+			entries = append(entries, Activity{At: now, By: who, Text: text})
 			rows[i].Assignee = *item.Assignee
 		}
 		if item.Note != nil {
-			entries = append(entries, activity{At: now, By: who, Text: *item.Note})
+			entries = append(entries, Activity{At: now, By: who, Text: *item.Note})
 		}
 		rows[i].Activity = entries
 		if err := s.save(rows); err != nil {

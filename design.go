@@ -59,24 +59,24 @@ type designData struct {
 	Posts   []post   `json:"posts"`
 }
 
-// designStore keeps the design library and the Instagram post queue in ARECOSYS_MEDIA_DIR.
+// DesignStore keeps the design library and the Instagram post queue in ARECOSYS_MEDIA_DIR.
 // Like the lead store it is meant for a single server instance.
-type designStore struct {
+type DesignStore struct {
 	mu   sync.Mutex
-	dir  string
+	Dir  string
 	key  []byte
 	data designData
 }
 
 var imageExts = map[string]string{"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
-func newDesignStore(dir string) (*designStore, error) {
+func NewDesignStore(dir string) (*DesignStore, error) {
 	// The signing key only needs to outlive a 15 minute link, so a fresh one per start is fine.
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
-	store := &designStore{dir: dir, key: key, data: designData{Folders: []string{"Brand", "Posts"}, Assets: []asset{}, Posts: []post{}}}
+	store := &DesignStore{Dir: dir, key: key, data: designData{Folders: []string{"Brand", "Posts"}, Assets: []asset{}, Posts: []post{}}}
 	if dir == "" {
 		return store, nil
 	}
@@ -110,16 +110,16 @@ func newDesignStore(dir string) (*designStore, error) {
 	return store, nil
 }
 
-func (d *designStore) clone() designData {
+func (d *DesignStore) clone() designData {
 	return designData{slices.Clone(d.data.Folders), slices.Clone(d.data.Assets), slices.Clone(d.data.Posts)}
 }
 
-func (d *designStore) save(next designData) error {
+func (d *DesignStore) save(next designData) error {
 	raw, err := json.Marshal(next)
 	if err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(d.dir, ".design-*")
+	temp, err := os.CreateTemp(d.Dir, ".design-*")
 	if err != nil {
 		return err
 	}
@@ -128,22 +128,22 @@ func (d *designStore) save(next designData) error {
 	if err := errors.Join(writeErr, temp.Close()); err != nil {
 		return err
 	}
-	if err := os.Rename(temp.Name(), filepath.Join(d.dir, "design.json")); err != nil {
+	if err := os.Rename(temp.Name(), filepath.Join(d.Dir, "design.json")); err != nil {
 		return err
 	}
 	d.data = next
 	return nil
 }
 
-func (d *designStore) enabled(w http.ResponseWriter, r *http.Request) bool {
-	if d.dir == "" {
+func (d *DesignStore) enabled(w http.ResponseWriter, r *http.Request) bool {
+	if d.Dir == "" {
 		http.NotFound(w, r)
 		return false
 	}
 	return true
 }
 
-func (d *designStore) findAsset(id string) (asset, bool) {
+func (d *DesignStore) findAsset(id string) (asset, bool) {
 	for _, a := range d.data.Assets {
 		if a.ID == id {
 			return a, true
@@ -152,7 +152,7 @@ func (d *designStore) findAsset(id string) (asset, bool) {
 	return asset{}, false
 }
 
-func (d *designStore) path(a asset) string { return filepath.Join(d.dir, "files", a.ID+a.Ext) }
+func (d *DesignStore) path(a asset) string { return filepath.Join(d.Dir, "files", a.ID+a.Ext) }
 
 func validCaption(caption string) bool {
 	if len([]rune(caption)) > 2200 {
@@ -167,25 +167,25 @@ func validCaption(caption string) bool {
 	return tags <= 30
 }
 
-func (d *designStore) list(w http.ResponseWriter, r *http.Request) {
-	if d.dir == "" {
-		jsonResponse(w, map[string]any{"state": "demo"})
+func (d *DesignStore) list(w http.ResponseWriter, r *http.Request) {
+	if d.Dir == "" {
+		JSONResponse(w, map[string]any{"state": "demo"})
 		return
 	}
 	d.mu.Lock()
 	data := d.clone()
 	d.mu.Unlock()
-	jsonResponse(w, map[string]any{"state": "live", "data": data, "instagram": instagramConnected()})
+	JSONResponse(w, map[string]any{"state": "live", "data": data, "instagram": Connected()})
 }
 
-func (d *designStore) addFolder(w http.ResponseWriter, r *http.Request) {
+func (d *DesignStore) addFolder(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
 	var item struct {
 		Name string `json:"name"`
 	}
-	if !readJSON(w, r, &item) {
+	if !ReadJSON(w, r, &item) {
 		return
 	}
 	name := strings.TrimSpace(item.Name)
@@ -210,7 +210,7 @@ func (d *designStore) addFolder(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (d *designStore) upload(w http.ResponseWriter, r *http.Request) {
+func (d *DesignStore) upload(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
@@ -256,10 +256,10 @@ func (d *designStore) upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "image could not be saved", http.StatusInternalServerError)
 		return
 	}
-	jsonResponse(w, item)
+	JSONResponse(w, item)
 }
 
-func (d *designStore) serve(w http.ResponseWriter, r *http.Request) {
+func (d *DesignStore) serve(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
@@ -269,7 +269,7 @@ func (d *designStore) serve(w http.ResponseWriter, r *http.Request) {
 	d.sendFile(w, r, item, ok)
 }
 
-func (d *designStore) sendFile(w http.ResponseWriter, r *http.Request, item asset, ok bool) {
+func (d *DesignStore) sendFile(w http.ResponseWriter, r *http.Request, item asset, ok bool) {
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -285,7 +285,7 @@ func (d *designStore) sendFile(w http.ResponseWriter, r *http.Request, item asse
 	http.ServeContent(w, r, "", time.Time{}, file)
 }
 
-func (d *designStore) deleteAsset(w http.ResponseWriter, r *http.Request) {
+func (d *DesignStore) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
@@ -312,7 +312,7 @@ func (d *designStore) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (d *designStore) addPost(w http.ResponseWriter, r *http.Request) {
+func (d *DesignStore) addPost(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
@@ -321,7 +321,7 @@ func (d *designStore) addPost(w http.ResponseWriter, r *http.Request) {
 		Asset   string   `json:"asset"`
 		Assets  []string `json:"assets"`
 	}
-	if !readJSON(w, r, &item) {
+	if !ReadJSON(w, r, &item) {
 		return
 	}
 	caption := strings.TrimSpace(item.Caption)
@@ -352,10 +352,10 @@ func (d *designStore) addPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "post could not be saved", http.StatusInternalServerError)
 		return
 	}
-	jsonResponse(w, created)
+	JSONResponse(w, created)
 }
 
-func (d *designStore) updatePost(w http.ResponseWriter, r *http.Request) {
+func (d *DesignStore) updatePost(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
@@ -364,7 +364,7 @@ func (d *designStore) updatePost(w http.ResponseWriter, r *http.Request) {
 		Action      string  `json:"action"`
 		ScheduledAt string  `json:"scheduledAt"`
 	}
-	if !readJSON(w, r, &item) {
+	if !ReadJSON(w, r, &item) {
 		return
 	}
 	if item.Caption == nil && item.Action == "" {
@@ -394,7 +394,7 @@ func (d *designStore) updatePost(w http.ResponseWriter, r *http.Request) {
 		p.Caption = caption
 	}
 	publishNow := false
-	if (item.Action == "schedule" || item.Action == "publish") && !requireAdmin(w, r) {
+	if (item.Action == "schedule" || item.Action == "publish") && !RequireAdmin(w, r) {
 		return
 	}
 	switch item.Action {
@@ -416,7 +416,7 @@ func (d *designStore) updatePost(w http.ResponseWriter, r *http.Request) {
 			refuse()
 			return
 		}
-		if !instagramConnected() {
+		if !Connected() {
 			http.Error(w, "Instagram is not connected", http.StatusConflict)
 			return
 		}
@@ -441,10 +441,10 @@ func (d *designStore) updatePost(w http.ResponseWriter, r *http.Request) {
 	if publishNow {
 		go d.publish(p.ID)
 	}
-	jsonResponse(w, *p)
+	JSONResponse(w, *p)
 }
 
-func (d *designStore) deletePost(w http.ResponseWriter, r *http.Request) {
+func (d *DesignStore) deletePost(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
@@ -468,25 +468,25 @@ func (d *designStore) deletePost(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (d *designStore) sign(id string, expires int64) string {
+func (d *DesignStore) sign(id string, expires int64) string {
 	mac := hmac.New(sha256.New, d.key)
 	fmt.Fprintf(mac, "%s|%d", id, expires)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (d *designStore) signedURL(id string) string {
+func (d *DesignStore) signedURL(id string) string {
 	expires := time.Now().Add(15 * time.Minute).Unix()
 	base := strings.TrimRight(os.Getenv("ARECOSYS_PUBLIC_BASE_URL"), "/")
 	return fmt.Sprintf("%s/public/media/%s?exp=%d&sig=%s", base, id, expires, d.sign(id, expires))
 }
 
-// public serves the one image Instagram needs to fetch. It needs a valid signature and
+// Public serves the one image Instagram needs to fetch. It needs a valid signature and
 // the image must belong to a post that is publishing right now.
-func (d *designStore) public(w http.ResponseWriter, r *http.Request) {
+func (d *DesignStore) Public(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/public/media/")
 	expires, err := strconv.ParseInt(r.URL.Query().Get("exp"), 10, 64)
 	signature := r.URL.Query().Get("sig")
-	if d.dir == "" || err != nil || expires < time.Now().Unix() || subtle.ConstantTimeCompare([]byte(signature), []byte(d.sign(id, expires))) != 1 {
+	if d.Dir == "" || err != nil || expires < time.Now().Unix() || subtle.ConstantTimeCompare([]byte(signature), []byte(d.sign(id, expires))) != 1 {
 		http.NotFound(w, r)
 		return
 	}
@@ -499,7 +499,7 @@ func (d *designStore) public(w http.ResponseWriter, r *http.Request) {
 	d.sendFile(w, r, item, ok)
 }
 
-func (d *designStore) publish(id string) {
+func (d *DesignStore) publish(id string) {
 	d.mu.Lock()
 	var p post
 	for _, candidate := range d.data.Posts {
@@ -514,7 +514,7 @@ func (d *designStore) publish(id string) {
 	for _, id := range p.images() {
 		urls = append(urls, d.signedURL(id))
 	}
-	mediaID, err := instagramPublish(ctx, urls, p.Caption)
+	mediaID, err := Publish(ctx, urls, p.Caption)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	next := d.clone()
@@ -535,8 +535,8 @@ func (d *designStore) publish(id string) {
 	}
 }
 
-// run publishes scheduled posts when they fall due.
-func (d *designStore) run() {
+// Run publishes scheduled posts when they fall due.
+func (d *DesignStore) Run() {
 	for range time.Tick(30 * time.Second) {
 		for _, id := range d.claimDue() {
 			go d.publish(id)
@@ -544,8 +544,8 @@ func (d *designStore) run() {
 	}
 }
 
-func (d *designStore) claimDue() []string {
-	if !instagramConnected() {
+func (d *DesignStore) claimDue() []string {
+	if !Connected() {
 		return nil
 	}
 	d.mu.Lock()
@@ -570,7 +570,7 @@ func (d *designStore) claimDue() []string {
 	return due
 }
 
-func (d *designStore) routes(app *http.ServeMux) {
+func (d *DesignStore) Routes(app *http.ServeMux) {
 	app.HandleFunc("GET /api/design", d.list)
 	app.HandleFunc("POST /api/design/folders", d.addFolder)
 	app.HandleFunc("POST /api/design/assets", d.upload)

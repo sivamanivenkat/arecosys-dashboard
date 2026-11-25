@@ -9,35 +9,35 @@ import (
 	"strings"
 )
 
-func upstream(ctx context.Context, name, days string) source {
+func Fetch(ctx context.Context, name, days string) Source {
 	key := "ARECOSYS_" + strings.ToUpper(name)
 	address := os.Getenv(key + "_URL")
-	if address == "" && name == "website" && ga4Configured() {
-		return ga4Source(ctx, days)
+	if address == "" && name == "website" && GA4Configured() {
+		return GA4Source(ctx, days)
 	}
-	if address == "" && name == "instagram" && igInsightsConfigured() {
-		return igInsightsSource(ctx, days)
+	if address == "" && name == "instagram" && InsightsConfigured() {
+		return InsightsSource(ctx, days)
 	}
 	if address == "" {
-		return source{State: "demo"}
+		return Source{State: "demo"}
 	}
 	endpoint, err := url.Parse(address)
 	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil {
-		return source{State: "error"}
+		return Source{State: "error"}
 	}
 	query := endpoint.Query()
 	query.Set("days", days)
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return source{State: "error"}
+		return Source{State: "error"}
 	}
 	if token := os.Getenv(key + "_TOKEN"); token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
 	var data map[string]json.RawMessage
-	if err := requestJSON(request, &data); err != nil || data == nil {
-		return source{State: "error"}
+	if err := RequestJSON(request, &data); err != nil || data == nil {
+		return Source{State: "error"}
 	}
-	return source{State: "live", Data: data}
+	return Source{State: "live", Data: data}
 }

@@ -1,11 +1,11 @@
 package main
 
-type source struct {
+type Source struct {
 	State string `json:"state"`
 	Data  any    `json:"data,omitempty"`
 }
 
-type lead struct {
+type Lead struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
 	Email     string     `json:"email"`
@@ -19,11 +19,11 @@ type lead struct {
 	Assignee  string     `json:"assignee"`
 	Responded string     `json:"responded"`
 	Phone     string     `json:"phone"`
-	Activity  []activity `json:"activity"`
+	Activity  []Activity `json:"activity"`
 }
 
-// activity is one entry in a lead's timeline: a note or an automatic change record.
-type activity struct {
+// Activity is one entry in a lead's timeline: a note or an automatic change record.
+type Activity struct {
 	At   string `json:"at"`
 	By   string `json:"by"`
 	Text string `json:"text"`

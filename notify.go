@@ -48,10 +48,10 @@ type alertState struct {
 	LastReport string          `json:"lastReport"`
 }
 
-// alerter watches leads and fleet status and tells the team when something needs attention.
-type alerter struct {
-	store     *leadStore
-	design    *designStore
+// Alerter watches leads and fleet status and tells the team when something needs attention.
+type Alerter struct {
+	store     *LeadStore
+	design    *DesignStore
 	fleet     func(ctx context.Context) ([]fleetFeature, bool)
 	number    func(ctx context.Context, source, field string) (float64, bool)
 	send      func(ctx context.Context, subject, body string) error
@@ -60,14 +60,14 @@ type alerter struct {
 	state     alertState
 }
 
-func alertsConfigured() bool {
-	return os.Getenv("ARECOSYS_ALERT_WEBHOOK_URL") != "" || (os.Getenv("ARECOSYS_ALERT_EMAIL") != "" && gmailConfigured())
+func AlertsConfigured() bool {
+	return os.Getenv("ARECOSYS_ALERT_WEBHOOK_URL") != "" || (os.Getenv("ARECOSYS_ALERT_EMAIL") != "" && Configured())
 }
 
-func newAlerter(store *leadStore, design *designStore) *alerter {
-	a := &alerter{store: store, design: design, send: sendNotification}
+func NewAlerter(store *LeadStore, design *DesignStore) *Alerter {
+	a := &Alerter{store: store, design: design, send: sendNotification}
 	a.fleet = func(ctx context.Context) ([]fleetFeature, bool) {
-		result := upstream(ctx, "fleet", "30")
+		result := Fetch(ctx, "fleet", "30")
 		data, ok := result.Data.(map[string]json.RawMessage)
 		if result.State != "live" || !ok {
 			return nil, false
@@ -79,7 +79,7 @@ func newAlerter(store *leadStore, design *designStore) *alerter {
 		return features, true
 	}
 	a.number = func(ctx context.Context, name, field string) (float64, bool) {
-		result := upstream(ctx, name, "7")
+		result := Fetch(ctx, name, "7")
 		data, ok := result.Data.(map[string]json.RawMessage)
 		if result.State != "live" || !ok {
 			return 0, false
@@ -88,8 +88,8 @@ func newAlerter(store *leadStore, design *designStore) *alerter {
 		return value, json.Unmarshal(data[field], &value) == nil
 	}
 	a.state.Flagged = map[string]bool{}
-	if store != nil && store.path != "" {
-		a.statePath = store.path + ".alerts"
+	if store != nil && store.Path != "" {
+		a.statePath = store.Path + ".alerts"
 		if raw, err := os.ReadFile(a.statePath); err == nil {
 			json.Unmarshal(raw, &a.state)
 			if a.state.Flagged == nil {
@@ -100,7 +100,7 @@ func newAlerter(store *leadStore, design *designStore) *alerter {
 	return a
 }
 
-func (a *alerter) persist() {
+func (a *Alerter) persist() {
 	if a.statePath == "" {
 		return
 	}
@@ -110,7 +110,7 @@ func (a *alerter) persist() {
 	}
 }
 
-func (a *alerter) run() {
+func (a *Alerter) Run() {
 	for range time.Tick(5 * time.Minute) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		a.evaluate(ctx, time.Now())
@@ -121,16 +121,16 @@ func (a *alerter) run() {
 
 // evaluate sends one message listing everything newly flagged since the last check. The
 // first run only records what is already wrong, so a restart does not flood the team.
-func (a *alerter) evaluate(ctx context.Context, now time.Time) {
+func (a *Alerter) evaluate(ctx context.Context, now time.Time) {
 	current := map[string]string{}
 	if a.store != nil {
-		a.store.mu.Lock()
-		for _, row := range a.store.rows {
+		a.store.Mu.Lock()
+		for _, row := range a.store.Rows {
 			if due, ok := dueAt(row.Created); ok && row.Status == "New" && row.Responded == "" && now.After(due) {
 				current["lead:"+row.ID] = fmt.Sprintf("Lead %s (%s) is past the one-business-day response target.", row.Name, row.Source)
 			}
 		}
-		a.store.mu.Unlock()
+		a.store.Mu.Unlock()
 	}
 	features, fleetOK := a.fleet(ctx)
 	for _, feature := range features {
@@ -174,7 +174,7 @@ func (a *alerter) evaluate(ctx context.Context, now time.Time) {
 }
 
 // weeklyReport sends a plain-text summary on Monday morning, once per day.
-func (a *alerter) weeklyReport(ctx context.Context, now time.Time) {
+func (a *Alerter) weeklyReport(ctx context.Context, now time.Time) {
 	today := now.Format("2006-01-02")
 	a.mu.Lock()
 	skip := now.Weekday() != time.Monday || now.Hour() < 8 || a.state.LastReport == today
@@ -185,10 +185,10 @@ func (a *alerter) weeklyReport(ctx context.Context, now time.Time) {
 	var out strings.Builder
 	fmt.Fprintf(&out, "AR ECOSYS weekly summary, week ending %s\n\n", today)
 	if a.store != nil {
-		a.store.mu.Lock()
+		a.store.Mu.Lock()
 		stages := map[string]int{}
 		overdue, received := 0, 0
-		for _, row := range a.store.rows {
+		for _, row := range a.store.Rows {
 			stages[row.Status]++
 			if due, ok := dueAt(row.Created); ok && row.Status == "New" && row.Responded == "" && now.After(due) {
 				overdue++
@@ -197,7 +197,7 @@ func (a *alerter) weeklyReport(ctx context.Context, now time.Time) {
 				received++
 			}
 		}
-		a.store.mu.Unlock()
+		a.store.Mu.Unlock()
 		fmt.Fprintf(&out, "Leads: %d received this week. New %d, Contacted %d, Qualified %d, Closed %d. %d past the response target.\n", received, stages["New"], stages["Contacted"], stages["Qualified"], stages["Closed"], overdue)
 	}
 	if sessions, ok := a.number(ctx, "website", "sessions"); ok {
@@ -206,7 +206,7 @@ func (a *alerter) weeklyReport(ctx context.Context, now time.Time) {
 	if reach, ok := a.number(ctx, "instagram", "reach"); ok {
 		fmt.Fprintf(&out, "Instagram: %.0f accounts reached in the last 7 days.\n", reach)
 	}
-	if a.design != nil && a.design.dir != "" {
+	if a.design != nil && a.design.Dir != "" {
 		published := 0
 		a.design.mu.Lock()
 		for _, p := range a.design.data.Posts {
@@ -244,7 +244,7 @@ func (a *alerter) weeklyReport(ctx context.Context, now time.Time) {
 // when configured, to a webhook. It fails only if every configured channel fails.
 func sendNotification(ctx context.Context, subject, body string) error {
 	var failures, attempts int
-	if to := os.Getenv("ARECOSYS_ALERT_EMAIL"); to != "" && gmailConfigured() {
+	if to := os.Getenv("ARECOSYS_ALERT_EMAIL"); to != "" && Configured() {
 		attempts++
 		if err := gmailSend(ctx, to, subject, body); err != nil {
 			failures++
@@ -273,7 +273,7 @@ func postWebhook(ctx context.Context, address, text string) error {
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	return requestJSON(request, nil)
+	return RequestJSON(request, nil)
 }
 
 func gmailSend(ctx context.Context, to, subject, body string) error {
@@ -281,12 +281,12 @@ func gmailSend(ctx context.Context, to, subject, body string) error {
 	if err != nil {
 		return err
 	}
-	token, err := gmailToken(ctx)
+	token, err := Token(ctx)
 	if err != nil {
 		return err
 	}
 	var profile struct{ EmailAddress string }
-	if err := gmailRequest(ctx, token, http.MethodGet, "profile", "", &profile); err != nil {
+	if err := Request(ctx, token, http.MethodGet, "profile", "", &profile); err != nil {
 		return err
 	}
 	sender, err := mail.ParseAddress(profile.EmailAddress)
@@ -303,5 +303,5 @@ func gmailSend(ctx context.Context, to, subject, body string) error {
 	subject = strings.NewReplacer("\r", " ", "\n", " ").Replace(subject)
 	raw := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s", sender.String(), recipient.String(), mime.QEncoding.Encode("UTF-8", subject), lines.String())
 	payload, _ := json.Marshal(map[string]string{"raw": base64.RawURLEncoding.EncodeToString([]byte(raw))})
-	return gmailRequest(ctx, token, http.MethodPost, "messages/send", string(payload), nil)
+	return Request(ctx, token, http.MethodPost, "messages/send", string(payload), nil)
 }

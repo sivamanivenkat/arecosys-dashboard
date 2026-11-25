@@ -14,30 +14,30 @@ import (
 	"time"
 )
 
-// igGraph is a variable so tests can point it at a local fake.
-var igGraph = "https://graph.instagram.com/v23.0/"
+// Graph is a variable so tests can point it at a local fake.
+var Graph = "https://graph.instagram.com/v23.0/"
 
-var igNumeric = regexp.MustCompile(`^[0-9]{1,40}$`)
+var Numeric = regexp.MustCompile(`^[0-9]{1,40}$`)
 
-// instagramConnected reports whether publishing is configured. Instagram fetches the
+// Connected reports whether publishing is configured. Instagram fetches the
 // image from ARECOSYS_PUBLIC_BASE_URL, so that must be a public HTTPS address.
-func instagramConnected() bool {
+func Connected() bool {
 	base, err := url.Parse(os.Getenv("ARECOSYS_PUBLIC_BASE_URL"))
 	return err == nil && base.Scheme == "https" && base.Host != "" &&
-		igNumeric.MatchString(os.Getenv("ARECOSYS_INSTAGRAM_USER_ID")) &&
+		Numeric.MatchString(os.Getenv("ARECOSYS_INSTAGRAM_USER_ID")) &&
 		os.Getenv("ARECOSYS_INSTAGRAM_ACCESS_TOKEN") != ""
 }
 
-// igCall never returns the underlying transport error: it embeds the request URL,
+// Call never returns the underlying transport error: it embeds the request URL,
 // which carries the access token for GET requests.
-func igCall(ctx context.Context, method, path string, values url.Values, out any) error {
+func Call(ctx context.Context, method, path string, values url.Values, out any) error {
 	values.Set("access_token", os.Getenv("ARECOSYS_INSTAGRAM_ACCESS_TOKEN"))
 	var request *http.Request
 	var err error
 	if method == http.MethodGet {
-		request, err = http.NewRequestWithContext(ctx, method, igGraph+path+"?"+values.Encode(), nil)
+		request, err = http.NewRequestWithContext(ctx, method, Graph+path+"?"+values.Encode(), nil)
 	} else {
-		request, err = http.NewRequestWithContext(ctx, method, igGraph+path, strings.NewReader(values.Encode()))
+		request, err = http.NewRequestWithContext(ctx, method, Graph+path, strings.NewReader(values.Encode()))
 		if err == nil {
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		}
@@ -45,7 +45,7 @@ func igCall(ctx context.Context, method, path string, values url.Values, out any
 	if err != nil {
 		return errors.New("Instagram request could not be created")
 	}
-	response, err := client.Do(request)
+	response, err := Client.Do(request)
 	if err != nil {
 		return errors.New("Instagram could not be reached")
 	}
@@ -72,7 +72,7 @@ func igWait(ctx context.Context, id string) error {
 		var state struct {
 			StatusCode string `json:"status_code"`
 		}
-		if err := igCall(ctx, http.MethodGet, id, url.Values{"fields": {"status_code"}}, &state); err != nil {
+		if err := Call(ctx, http.MethodGet, id, url.Values{"fields": {"status_code"}}, &state); err != nil {
 			return err
 		}
 		switch state.StatusCode {
@@ -90,9 +90,9 @@ func igWait(ctx context.Context, id string) error {
 	return errors.New("Instagram took too long to process the image")
 }
 
-// instagramPublish posts one JPEG image, or a carousel when given several. It creates the
+// Publish posts one JPEG image, or a carousel when given several. It creates the
 // media container, waits for Instagram to finish with it, then publishes the container.
-func instagramPublish(ctx context.Context, imageURLs []string, caption string) (string, error) {
+func Publish(ctx context.Context, imageURLs []string, caption string) (string, error) {
 	if len(imageURLs) == 0 || len(imageURLs) > 10 {
 		return "", errors.New("a post needs between 1 and 10 images")
 	}
@@ -101,10 +101,10 @@ func instagramPublish(ctx context.Context, imageURLs []string, caption string) (
 		var out struct {
 			ID string `json:"id"`
 		}
-		if err := igCall(ctx, http.MethodPost, user+"/media", values, &out); err != nil {
+		if err := Call(ctx, http.MethodPost, user+"/media", values, &out); err != nil {
 			return "", err
 		}
-		if !igNumeric.MatchString(out.ID) {
+		if !Numeric.MatchString(out.ID) {
 			return "", errors.New("Instagram returned an invalid media container")
 		}
 		return out.ID, nil
@@ -136,7 +136,7 @@ func instagramPublish(ctx context.Context, imageURLs []string, caption string) (
 	var published struct {
 		ID string `json:"id"`
 	}
-	if err := igCall(ctx, http.MethodPost, user+"/media_publish", url.Values{"creation_id": {container}}, &published); err != nil {
+	if err := Call(ctx, http.MethodPost, user+"/media_publish", url.Values{"creation_id": {container}}, &published); err != nil {
 		return "", err
 	}
 	return published.ID, nil

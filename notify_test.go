@@ -8,11 +8,11 @@ import (
 	"time"
 )
 
-func testAlerter(t *testing.T) (*alerter, *[]string) {
+func testAlerter(t *testing.T) (*Alerter, *[]string) {
 	t.Helper()
 	store := newStore(t)
 	sent := []string{}
-	a := newAlerter(store, nil)
+	a := NewAlerter(store, nil)
 	a.send = func(_ context.Context, subject, body string) error {
 		sent = append(sent, subject+": "+body)
 		return nil
@@ -36,7 +36,7 @@ func TestDueAtSkipsWeekends(t *testing.T) {
 func TestAlertsSeedThenReportOnlyNewProblems(t *testing.T) {
 	a, sent := testAlerter(t)
 	old := time.Now().AddDate(0, 0, -10).Format(time.RFC3339)
-	a.store.rows = []lead{{ID: "a", Name: "Old lead", Source: "Website", Status: "New", Created: old}}
+	a.store.Rows = []Lead{{ID: "a", Name: "Old lead", Source: "Website", Status: "New", Created: old}}
 	ctx := context.Background()
 	a.evaluate(ctx, time.Now())
 	if len(*sent) != 0 {
@@ -46,7 +46,7 @@ func TestAlertsSeedThenReportOnlyNewProblems(t *testing.T) {
 	if len(*sent) != 0 {
 		t.Fatal("known problem was reported again")
 	}
-	a.store.rows = append(a.store.rows, lead{ID: "b", Name: "Second", Source: "Email", Status: "New", Created: old})
+	a.store.Rows = append(a.store.Rows, Lead{ID: "b", Name: "Second", Source: "Email", Status: "New", Created: old})
 	a.fleet = func(context.Context) ([]fleetFeature, bool) {
 		return []fleetFeature{{ID: "gps", Name: "Live GPS telemetry", Metric: "Vehicles reporting", Value: "46 / 48", Status: "Needs attention"}}, true
 	}
@@ -107,7 +107,7 @@ func TestWeeklyReportOncePerMonday(t *testing.T) {
 	a.number = func(_ context.Context, source, _ string) (float64, bool) {
 		return map[string]float64{"website": 1200, "instagram": 3400}[source], true
 	}
-	a.store.rows = []lead{{ID: "a", Name: "Ann", Status: "New", Created: time.Now().Format(time.RFC3339)}}
+	a.store.Rows = []Lead{{ID: "a", Name: "Ann", Status: "New", Created: time.Now().Format(time.RFC3339)}}
 	ctx := context.Background()
 	monday := time.Date(2026, 11, 23, 9, 0, 0, 0, time.Local)
 	a.weeklyReport(ctx, monday.Add(-24*time.Hour)) // Sunday

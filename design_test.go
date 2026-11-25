@@ -21,20 +21,20 @@ func jpegBytes(t *testing.T) []byte {
 	return out.Bytes()
 }
 
-func designServer(t *testing.T) (*designStore, *http.ServeMux) {
+func designServer(t *testing.T) (*DesignStore, *http.ServeMux) {
 	t.Helper()
-	store, err := newDesignStore(t.TempDir())
+	store, err := NewDesignStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	store.routes(mux)
+	store.Routes(mux)
 	return store, mux
 }
 
 func do(mux *http.ServeMux, method, target, contentType string, body []byte) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, target, bytes.NewReader(body))
-	r = withAccount(r, account{Name: "tester", Role: "admin"})
+	r = WithAccount(r, Account{Name: "tester", Role: "admin"})
 	if contentType != "" {
 		r.Header.Set("Content-Type", contentType)
 	}
@@ -121,7 +121,7 @@ func TestPublicMediaNeedsSignatureAndPublishingPost(t *testing.T) {
 	do(mux, "POST", "/api/design/posts", "application/json", []byte(`{"caption":"Hi","asset":"`+id+`"}`))
 	fetch := func(target string) int {
 		w := httptest.NewRecorder()
-		store.public(w, httptest.NewRequest("GET", target, nil))
+		store.Public(w, httptest.NewRequest("GET", target, nil))
 		return w.Code
 	}
 	connectInstagram(t)
@@ -141,12 +141,12 @@ func TestPublicMediaNeedsSignatureAndPublishingPost(t *testing.T) {
 
 func TestInterruptedPublishIsNotRetried(t *testing.T) {
 	dir := t.TempDir()
-	store, _ := newDesignStore(dir)
+	store, _ := NewDesignStore(dir)
 	store.data.Posts = []post{{ID: "p1", Status: "Publishing"}}
 	if err := store.save(store.clone()); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := newDesignStore(dir)
+	reopened, err := NewDesignStore(dir)
 	if err != nil || reopened.data.Posts[0].Status != "Failed" {
 		t.Fatalf("status after restart: %v %v", err, reopened.data.Posts)
 	}
@@ -173,11 +173,11 @@ func TestInstagramPublishFlow(t *testing.T) {
 		}
 	}))
 	defer fake.Close()
-	old := igGraph
-	igGraph = fake.URL + "/"
-	defer func() { igGraph = old }()
+	old := Graph
+	Graph = fake.URL + "/"
+	defer func() { Graph = old }()
 	connectInstagram(t)
-	id, err := instagramPublish(context.Background(), []string{"https://img.example.test/a.jpg"}, "caption")
+	id, err := Publish(context.Background(), []string{"https://img.example.test/a.jpg"}, "caption")
 	if err != nil || id != "999" {
 		t.Fatalf("publish: %q %v", id, err)
 	}
@@ -208,7 +208,7 @@ func TestCarouselPostAndPublish(t *testing.T) {
 	store.data.Posts[0].Status = "Publishing"
 	connectInstagram(t)
 	w := httptest.NewRecorder()
-	store.public(w, httptest.NewRequest("GET", strings.TrimPrefix(store.signedURL(ids[1]), "https://dash.example.test"), nil))
+	store.Public(w, httptest.NewRequest("GET", strings.TrimPrefix(store.signedURL(ids[1]), "https://dash.example.test"), nil))
 	if w.Code != http.StatusOK {
 		t.Errorf("second slide must be public while publishing: %d", w.Code)
 	}
@@ -235,10 +235,10 @@ func TestCarouselPostAndPublish(t *testing.T) {
 		}
 	}))
 	defer fake.Close()
-	old := igGraph
-	igGraph = fake.URL + "/"
-	defer func() { igGraph = old }()
-	id, err := instagramPublish(context.Background(), []string{"https://i.example.test/1.jpg", "https://i.example.test/2.jpg"}, "Swipe")
+	old := Graph
+	Graph = fake.URL + "/"
+	defer func() { Graph = old }()
+	id, err := Publish(context.Background(), []string{"https://i.example.test/1.jpg", "https://i.example.test/2.jpg"}, "Swipe")
 	if err != nil || id != "999" {
 		t.Fatalf("carousel publish: %q %v", id, err)
 	}

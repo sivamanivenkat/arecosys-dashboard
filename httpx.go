@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-var client = &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+var Client = &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
-func readJSON(w http.ResponseWriter, r *http.Request, value any) bool {
+func ReadJSON(w http.ResponseWriter, r *http.Request, value any) bool {
 	contentType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if contentType != "application/json" {
 		http.Error(w, "expected application/json", http.StatusUnsupportedMediaType)
@@ -27,15 +27,15 @@ func readJSON(w http.ResponseWriter, r *http.Request, value any) bool {
 	return true
 }
 
-func jsonResponse(w http.ResponseWriter, value any) {
+func JSONResponse(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		log.Print("response encoding failed")
 	}
 }
 
-func requestJSON(request *http.Request, value any) error {
-	response, err := client.Do(request)
+func RequestJSON(request *http.Request, value any) error {
+	response, err := Client.Do(request)
 	if err != nil {
 		return err
 	}

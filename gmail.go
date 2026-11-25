@@ -70,9 +70,9 @@ func (p gmailPart) plainText() string {
 	return ""
 }
 
-func gmailConfigured() bool { return os.Getenv("ARECOSYS_GMAIL_REFRESH_TOKEN") != "" }
+func Configured() bool { return os.Getenv("ARECOSYS_GMAIL_REFRESH_TOKEN") != "" }
 
-func gmailToken(ctx context.Context) (string, error) {
+func Token(ctx context.Context) (string, error) {
 	form := url.Values{
 		"client_id":     {os.Getenv("ARECOSYS_GMAIL_CLIENT_ID")},
 		"client_secret": {os.Getenv("ARECOSYS_GMAIL_CLIENT_SECRET")},
@@ -87,7 +87,7 @@ func gmailToken(ctx context.Context) (string, error) {
 	var result struct {
 		AccessToken string `json:"access_token"`
 	}
-	if err := requestJSON(request, &result); err != nil {
+	if err := RequestJSON(request, &result); err != nil {
 		return "", err
 	}
 	if result.AccessToken == "" {
@@ -96,7 +96,7 @@ func gmailToken(ctx context.Context) (string, error) {
 	return result.AccessToken, nil
 }
 
-func gmailRequest(ctx context.Context, token, method, path, body string, result any) error {
+func Request(ctx context.Context, token, method, path, body string, result any) error {
 	request, err := http.NewRequestWithContext(ctx, method, gmailBase+path, strings.NewReader(body))
 	if err != nil {
 		return err
@@ -105,22 +105,22 @@ func gmailRequest(ctx context.Context, token, method, path, body string, result 
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	return requestJSON(request, result)
+	return RequestJSON(request, result)
 }
 
-func gmailInbox(ctx context.Context) source {
-	if !gmailConfigured() {
-		return source{State: "demo"}
+func Inbox(ctx context.Context) Source {
+	if !Configured() {
+		return Source{State: "demo"}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 28*time.Second)
 	defer cancel()
-	token, err := gmailToken(ctx)
+	token, err := Token(ctx)
 	if err != nil {
-		return source{State: "error"}
+		return Source{State: "error"}
 	}
 	var result struct{ Messages []struct{ ID string } }
-	if err := gmailRequest(ctx, token, http.MethodGet, "messages?labelIds=INBOX&maxResults=15", "", &result); err != nil {
-		return source{State: "error"}
+	if err := Request(ctx, token, http.MethodGet, "messages?labelIds=INBOX&maxResults=15", "", &result); err != nil {
+		return Source{State: "error"}
 	}
 	rows := make([]inboxMessage, len(result.Messages))
 	completed := make(chan error, len(rows))
@@ -131,7 +131,7 @@ func gmailInbox(ctx context.Context) source {
 				return
 			}
 			var message gmailMessage
-			if err := gmailRequest(ctx, token, http.MethodGet, "messages/"+entry.ID+"?format=full", "", &message); err != nil {
+			if err := Request(ctx, token, http.MethodGet, "messages/"+entry.ID+"?format=full", "", &message); err != nil {
 				completed <- err
 				return
 			}
@@ -156,10 +156,10 @@ func gmailInbox(ctx context.Context) source {
 	}
 	for range rows {
 		if err := <-completed; err != nil {
-			return source{State: "error"}
+			return Source{State: "error"}
 		}
 	}
-	return source{State: "live", Data: rows}
+	return Source{State: "live", Data: rows}
 }
 
 func makeReply(message gmailMessage, from, body string) (string, error) {
@@ -192,19 +192,19 @@ func makeReply(message gmailMessage, from, body string) (string, error) {
 	return fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nIn-Reply-To: %s\r\nReferences: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s", sender.String(), address.String(), mime.QEncoding.Encode("UTF-8", subject), parent, strings.Join(refs, "\r\n "), lines.String()), nil
 }
 
-func gmailReply(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
+func Reply(w http.ResponseWriter, r *http.Request) {
+	if !RequireAdmin(w, r) {
 		return
 	}
 	id := r.PathValue("id")
-	if !gmailConfigured() || !gmailID.MatchString(id) {
+	if !Configured() || !gmailID.MatchString(id) {
 		http.NotFound(w, r)
 		return
 	}
 	var reply struct {
 		Body string `json:"body"`
 	}
-	if !readJSON(w, r, &reply) {
+	if !ReadJSON(w, r, &reply) {
 		return
 	}
 	if reply.Body = strings.TrimSpace(reply.Body); reply.Body == "" || len(reply.Body) > 48000 {
@@ -213,18 +213,18 @@ func gmailReply(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
 	defer cancel()
-	token, err := gmailToken(ctx)
+	token, err := Token(ctx)
 	if err != nil {
 		http.Error(w, "Gmail is unavailable", http.StatusBadGateway)
 		return
 	}
 	var message gmailMessage
-	if err := gmailRequest(ctx, token, http.MethodGet, "messages/"+id+"?format=metadata", "", &message); err != nil {
+	if err := Request(ctx, token, http.MethodGet, "messages/"+id+"?format=metadata", "", &message); err != nil {
 		http.Error(w, "Gmail message is unavailable", http.StatusBadGateway)
 		return
 	}
 	var profile struct{ EmailAddress string }
-	if err := gmailRequest(ctx, token, http.MethodGet, "profile", "", &profile); err != nil {
+	if err := Request(ctx, token, http.MethodGet, "profile", "", &profile); err != nil {
 		http.Error(w, "Gmail address is unavailable", http.StatusBadGateway)
 		return
 	}
@@ -234,7 +234,7 @@ func gmailReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload, _ := json.Marshal(map[string]string{"raw": base64.RawURLEncoding.EncodeToString([]byte(mimeReply)), "threadId": message.ThreadID})
-	if err := gmailRequest(ctx, token, http.MethodPost, "messages/send", string(payload), nil); err != nil {
+	if err := Request(ctx, token, http.MethodPost, "messages/send", string(payload), nil); err != nil {
 		http.Error(w, "Gmail did not confirm the reply", http.StatusBadGateway)
 		return
 	}

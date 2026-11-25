@@ -26,7 +26,7 @@ import (
 // additionally schedule or publish posts, send email replies and read the audit log.
 var roles = []string{"viewer", "editor", "admin"}
 
-type account struct {
+type Account struct {
 	Name string `json:"name"`
 	Role string `json:"role"`
 	Hash string `json:"hash,omitempty"`
@@ -73,8 +73,8 @@ type failure struct {
 	since time.Time
 }
 
-type authority struct {
-	accounts   map[string]account
+type Authority struct {
+	accounts   map[string]Account
 	legacy     string
 	trustProxy bool
 	dummy      string
@@ -83,16 +83,16 @@ type authority struct {
 	verified   map[[32]byte]time.Time
 }
 
-// newAuthority reads the optional users file (a JSON array of {name, role, hash}) and the
+// NewAuthority reads the optional users file (a JSON array of {name, role, hash}) and the
 // single shared password, which signs in as the admin "arecosys".
-func newAuthority(legacyPassword, usersFile string) (*authority, error) {
-	a := &authority{accounts: map[string]account{}, legacy: legacyPassword, trustProxy: os.Getenv("ARECOSYS_TRUST_PROXY") == "1", failures: map[string]failure{}, verified: map[[32]byte]time.Time{}}
+func NewAuthority(legacyPassword, usersFile string) (*Authority, error) {
+	a := &Authority{accounts: map[string]Account{}, legacy: legacyPassword, trustProxy: os.Getenv("ARECOSYS_TRUST_PROXY") == "1", failures: map[string]failure{}, verified: map[[32]byte]time.Time{}}
 	if usersFile != "" {
 		raw, err := os.ReadFile(usersFile)
 		if err != nil {
 			return nil, errors.New("users file could not be read")
 		}
-		var list []account
+		var list []Account
 		raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf")) // editors on Windows often add a byte-order mark
 		if err := json.Unmarshal(raw, &list); err != nil {
 			return nil, errors.New("users file is not valid JSON")
@@ -104,15 +104,15 @@ func newAuthority(legacyPassword, usersFile string) (*authority, error) {
 			a.accounts[acc.Name] = acc
 		}
 	}
-	if a.enabled() {
+	if a.Enabled() {
 		a.dummy, _ = hashPassword("unused")
 	}
 	return a, nil
 }
 
-func (a *authority) enabled() bool { return a.legacy != "" || len(a.accounts) > 0 }
+func (a *Authority) Enabled() bool { return a.legacy != "" || len(a.accounts) > 0 }
 
-func (a *authority) clientIP(r *http.Request) string {
+func (a *Authority) ClientIP(r *http.Request) string {
 	if a.trustProxy {
 		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
 			parts := strings.Split(forwarded, ",")
@@ -126,7 +126,7 @@ func (a *authority) clientIP(r *http.Request) string {
 	return host
 }
 
-func (a *authority) check(name, password string) (account, bool) {
+func (a *Authority) check(name, password string) (Account, bool) {
 	if acc, ok := a.accounts[name]; ok {
 		key := sha256.Sum256([]byte(name + "\x00" + password + "\x00" + acc.Hash))
 		a.mu.Lock()
@@ -146,22 +146,22 @@ func (a *authority) check(name, password string) (account, bool) {
 			a.mu.Unlock()
 			return acc, true
 		}
-		return account{}, false
+		return Account{}, false
 	}
-	if a.legacy != "" && name == "arecosys" && same(password, a.legacy) {
-		return account{Name: "arecosys", Role: "admin"}, true
+	if a.legacy != "" && name == "arecosys" && Same(password, a.legacy) {
+		return Account{Name: "arecosys", Role: "admin"}, true
 	}
 	verifyPassword(a.dummy, password) // keep unknown-user timing close to a real check
-	return account{}, false
+	return Account{}, false
 }
 
-// require signs the request in. It answers 401 or 429 itself and returns false when the
+// Require signs the request in. It answers 401 or 429 itself and returns false when the
 // request must not continue. With no accounts configured everyone is a local admin.
-func (a *authority) require(w http.ResponseWriter, r *http.Request, audit *auditLog) (account, bool) {
-	if !a.enabled() {
-		return account{Name: "local", Role: "admin"}, true
+func (a *Authority) Require(w http.ResponseWriter, r *http.Request, audit *AuditLog) (Account, bool) {
+	if !a.Enabled() {
+		return Account{Name: "local", Role: "admin"}, true
 	}
-	ip := a.clientIP(r)
+	ip := a.ClientIP(r)
 	a.mu.Lock()
 	state := a.failures[ip]
 	if time.Since(state.since) > failureWindow {
@@ -171,7 +171,7 @@ func (a *authority) require(w http.ResponseWriter, r *http.Request, audit *audit
 	if state.count >= failureLimit {
 		w.Header().Set("Retry-After", strconv.Itoa(int((failureWindow-time.Since(state.since)).Seconds())+1))
 		http.Error(w, "too many failed sign-ins, try again later", http.StatusTooManyRequests)
-		return account{}, false
+		return Account{}, false
 	}
 	name, password, supplied := r.BasicAuth()
 	if supplied {
@@ -188,34 +188,34 @@ func (a *authority) require(w http.ResponseWriter, r *http.Request, audit *audit
 		state.count++
 		a.failures[ip] = state
 		a.mu.Unlock()
-		audit.add(auditEntry{User: name, IP: ip, Method: r.Method, Path: "sign-in", Status: http.StatusUnauthorized})
+		audit.Add(AuditEntry{User: name, IP: ip, Method: r.Method, Path: "sign-in", Status: http.StatusUnauthorized})
 	}
 	w.Header().Set("WWW-Authenticate", `Basic realm="AR ECOSYS"`)
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
-	return account{}, false
+	return Account{}, false
 }
 
 type accountKey struct{}
 
-func withAccount(r *http.Request, acc account) *http.Request {
+func WithAccount(r *http.Request, acc Account) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), accountKey{}, acc))
 }
 
-func currentAccount(r *http.Request) account {
-	acc, _ := r.Context().Value(accountKey{}).(account)
+func CurrentAccount(r *http.Request) Account {
+	acc, _ := r.Context().Value(accountKey{}).(Account)
 	return acc
 }
 
-// requireAdmin answers 403 unless the signed-in account is an admin.
-func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	if currentAccount(r).Role == "admin" {
+// RequireAdmin answers 403 unless the signed-in account is an admin.
+func RequireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if CurrentAccount(r).Role == "admin" {
 		return true
 	}
 	http.Error(w, "this action needs an admin account", http.StatusForbidden)
 	return false
 }
 
-type auditEntry struct {
+type AuditEntry struct {
 	At     string `json:"at"`
 	User   string `json:"user"`
 	IP     string `json:"ip"`
@@ -224,16 +224,16 @@ type auditEntry struct {
 	Status int    `json:"status"`
 }
 
-// auditLog keeps the most recent entries in memory and appends every entry to a file
+// AuditLog keeps the most recent entries in memory and appends every entry to a file
 // when ARECOSYS_AUDIT_FILE is set. It never records query strings or request bodies.
-type auditLog struct {
+type AuditLog struct {
 	mu     sync.Mutex
 	path   string
-	recent []auditEntry
+	recent []AuditEntry
 }
 
-func newAuditLog(path string) *auditLog {
-	l := &auditLog{path: path}
+func NewAuditLog(path string) *AuditLog {
+	l := &AuditLog{path: path}
 	if path == "" {
 		return l
 	}
@@ -245,7 +245,7 @@ func newAuditLog(path string) *auditLog {
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)
 	for scanner.Scan() {
-		var entry auditEntry
+		var entry AuditEntry
 		if json.Unmarshal(scanner.Bytes(), &entry) == nil {
 			l.recent = append(l.recent, entry)
 		}
@@ -256,7 +256,7 @@ func newAuditLog(path string) *auditLog {
 	return l
 }
 
-func (l *auditLog) add(entry auditEntry) {
+func (l *AuditLog) Add(entry AuditEntry) {
 	if l == nil {
 		return
 	}
@@ -279,39 +279,39 @@ func (l *auditLog) add(entry auditEntry) {
 	file.Write(append(line, '\n'))
 }
 
-func (l *auditLog) list(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
+func (l *AuditLog) List(w http.ResponseWriter, r *http.Request) {
+	if !RequireAdmin(w, r) {
 		return
 	}
 	l.mu.Lock()
-	out := make([]auditEntry, len(l.recent))
+	out := make([]AuditEntry, len(l.recent))
 	for i, entry := range l.recent {
 		out[len(out)-1-i] = entry
 	}
 	l.mu.Unlock()
-	jsonResponse(w, out)
+	JSONResponse(w, out)
 }
 
-type statusWriter struct {
+type StatusWriter struct {
 	http.ResponseWriter
-	status int
+	Status int
 }
 
-func (s *statusWriter) WriteHeader(code int) {
-	s.status = code
+func (s *StatusWriter) WriteHeader(code int) {
+	s.Status = code
 	s.ResponseWriter.WriteHeader(code)
 }
 
-func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+func (s *StatusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
-func me(w http.ResponseWriter, r *http.Request) {
-	acc := currentAccount(r)
-	jsonResponse(w, account{Name: acc.Name, Role: acc.Role})
+func Me(w http.ResponseWriter, r *http.Request) {
+	acc := CurrentAccount(r)
+	JSONResponse(w, Account{Name: acc.Name, Role: acc.Role})
 }
 
-// hashPasswordCommand implements `dashboard hash-password`: it reads a password from
+// HashPasswordCommand implements `dashboard hash-password`: it reads a password from
 // standard input and prints a hash for the users file.
-func hashPasswordCommand() error {
+func HashPasswordCommand() error {
 	fmt.Fprint(os.Stderr, "Password: ")
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil && line == "" {
