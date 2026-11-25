@@ -1,6 +1,7 @@
-package main
+package instagram
 
 import (
+	"arecosys-dashboard/internal/platform/httpx"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,7 +46,7 @@ func Call(ctx context.Context, method, path string, values url.Values, out any) 
 	if err != nil {
 		return errors.New("Instagram request could not be created")
 	}
-	response, err := Client.Do(request)
+	response, err := httpx.Client.Do(request)
 	if err != nil {
 		return errors.New("Instagram could not be reached")
 	}

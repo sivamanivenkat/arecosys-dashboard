@@ -1,4 +1,4 @@
-package main
+package domain
 
 type Source struct {
 	State string `json:"state"`

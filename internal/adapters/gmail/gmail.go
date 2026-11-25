@@ -1,6 +1,9 @@
-package main
+package gmail
 
 import (
+	"arecosys-dashboard/internal/domain"
+	"arecosys-dashboard/internal/platform/httpx"
+	"arecosys-dashboard/internal/security"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -87,7 +90,7 @@ func Token(ctx context.Context) (string, error) {
 	var result struct {
 		AccessToken string `json:"access_token"`
 	}
-	if err := RequestJSON(request, &result); err != nil {
+	if err := httpx.RequestJSON(request, &result); err != nil {
 		return "", err
 	}
 	if result.AccessToken == "" {
@@ -105,22 +108,22 @@ func Request(ctx context.Context, token, method, path, body string, result any) 
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	return RequestJSON(request, result)
+	return httpx.RequestJSON(request, result)
 }
 
-func Inbox(ctx context.Context) Source {
+func Inbox(ctx context.Context) domain.Source {
 	if !Configured() {
-		return Source{State: "demo"}
+		return domain.Source{State: "demo"}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 28*time.Second)
 	defer cancel()
 	token, err := Token(ctx)
 	if err != nil {
-		return Source{State: "error"}
+		return domain.Source{State: "error"}
 	}
 	var result struct{ Messages []struct{ ID string } }
 	if err := Request(ctx, token, http.MethodGet, "messages?labelIds=INBOX&maxResults=15", "", &result); err != nil {
-		return Source{State: "error"}
+		return domain.Source{State: "error"}
 	}
 	rows := make([]inboxMessage, len(result.Messages))
 	completed := make(chan error, len(rows))
@@ -156,10 +159,10 @@ func Inbox(ctx context.Context) Source {
 	}
 	for range rows {
 		if err := <-completed; err != nil {
-			return Source{State: "error"}
+			return domain.Source{State: "error"}
 		}
 	}
-	return Source{State: "live", Data: rows}
+	return domain.Source{State: "live", Data: rows}
 }
 
 func makeReply(message gmailMessage, from, body string) (string, error) {
@@ -193,7 +196,7 @@ func makeReply(message gmailMessage, from, body string) (string, error) {
 }
 
 func Reply(w http.ResponseWriter, r *http.Request) {
-	if !RequireAdmin(w, r) {
+	if !security.RequireAdmin(w, r) {
 		return
 	}
 	id := r.PathValue("id")
@@ -204,7 +207,7 @@ func Reply(w http.ResponseWriter, r *http.Request) {
 	var reply struct {
 		Body string `json:"body"`
 	}
-	if !ReadJSON(w, r, &reply) {
+	if !httpx.ReadJSON(w, r, &reply) {
 		return
 	}
 	if reply.Body = strings.TrimSpace(reply.Body); reply.Body == "" || len(reply.Body) > 48000 {

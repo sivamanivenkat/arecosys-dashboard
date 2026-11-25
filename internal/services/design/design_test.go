@@ -1,6 +1,8 @@
-package main
+package design
 
 import (
+	"arecosys-dashboard/internal/adapters/instagram"
+	"arecosys-dashboard/internal/security"
 	"bytes"
 	"context"
 	"image"
@@ -21,9 +23,9 @@ func jpegBytes(t *testing.T) []byte {
 	return out.Bytes()
 }
 
-func designServer(t *testing.T) (*DesignStore, *http.ServeMux) {
+func designServer(t *testing.T) (*Store, *http.ServeMux) {
 	t.Helper()
-	store, err := NewDesignStore(t.TempDir())
+	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +36,7 @@ func designServer(t *testing.T) (*DesignStore, *http.ServeMux) {
 
 func do(mux *http.ServeMux, method, target, contentType string, body []byte) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, target, bytes.NewReader(body))
-	r = WithAccount(r, Account{Name: "tester", Role: "admin"})
+	r = security.WithAccount(r, security.Account{Name: "tester", Role: "admin"})
 	if contentType != "" {
 		r.Header.Set("Content-Type", contentType)
 	}
@@ -69,7 +71,7 @@ func TestUploadValidation(t *testing.T) {
 func TestPostWorkflow(t *testing.T) {
 	store, mux := designServer(t)
 	upload := do(mux, "POST", "/api/design/assets?folder=Posts&name=Post", "image/jpeg", jpegBytes(t))
-	id := store.data.Assets[0].ID
+	id := store.Data.Assets[0].ID
 	if upload.Code != http.StatusOK {
 		t.Fatalf("upload: %d", upload.Code)
 	}
@@ -82,7 +84,7 @@ func TestPostWorkflow(t *testing.T) {
 	if w := do(mux, "POST", "/api/design/posts", "application/json", []byte(`{"caption":"Hello","asset":"`+id+`"}`)); w.Code != http.StatusOK {
 		t.Fatalf("create post: %d", w.Code)
 	}
-	postID := store.data.Posts[0].ID
+	postID := store.Data.Posts[0].ID
 	patch := func(body string) int {
 		return do(mux, "PATCH", "/api/design/posts/"+postID, "application/json", []byte(body)).Code
 	}
@@ -103,13 +105,13 @@ func TestPostWorkflow(t *testing.T) {
 	if c := patch(`{"action":"schedule","scheduledAt":"2999-01-01T00:00:00Z"}`); c != http.StatusBadRequest {
 		t.Errorf("schedule too far ahead: %d", c)
 	}
-	if c := patch(`{"action":"schedule","scheduledAt":"` + soon + `"}`); c != http.StatusOK || store.data.Posts[0].Status != "Scheduled" {
-		t.Errorf("schedule: %d %s", c, store.data.Posts[0].Status)
+	if c := patch(`{"action":"schedule","scheduledAt":"` + soon + `"}`); c != http.StatusOK || store.Data.Posts[0].Status != "Scheduled" {
+		t.Errorf("schedule: %d %s", c, store.Data.Posts[0].Status)
 	}
 	if w := do(mux, "DELETE", "/api/design/assets/"+id, "", nil); w.Code != http.StatusConflict {
 		t.Errorf("delete image used by queued post: %d", w.Code)
 	}
-	if c := patch(`{"action":"unapprove"}`); c != http.StatusOK || store.data.Posts[0].Status != "Draft" {
+	if c := patch(`{"action":"unapprove"}`); c != http.StatusOK || store.Data.Posts[0].Status != "Draft" {
 		t.Errorf("unapprove: %d", c)
 	}
 }
@@ -117,7 +119,7 @@ func TestPostWorkflow(t *testing.T) {
 func TestPublicMediaNeedsSignatureAndPublishingPost(t *testing.T) {
 	store, mux := designServer(t)
 	do(mux, "POST", "/api/design/assets?folder=Posts", "image/jpeg", jpegBytes(t))
-	id := store.data.Assets[0].ID
+	id := store.Data.Assets[0].ID
 	do(mux, "POST", "/api/design/posts", "application/json", []byte(`{"caption":"Hi","asset":"`+id+`"}`))
 	fetch := func(target string) int {
 		w := httptest.NewRecorder()
@@ -130,7 +132,7 @@ func TestPublicMediaNeedsSignatureAndPublishingPost(t *testing.T) {
 	if c := fetch(target); c != http.StatusNotFound {
 		t.Errorf("draft post image must not be public: %d", c)
 	}
-	store.data.Posts[0].Status = "Publishing"
+	store.Data.Posts[0].Status = "Publishing"
 	if c := fetch(target); c != http.StatusOK {
 		t.Errorf("publishing post image: %d", c)
 	}
@@ -141,14 +143,14 @@ func TestPublicMediaNeedsSignatureAndPublishingPost(t *testing.T) {
 
 func TestInterruptedPublishIsNotRetried(t *testing.T) {
 	dir := t.TempDir()
-	store, _ := NewDesignStore(dir)
-	store.data.Posts = []post{{ID: "p1", Status: "Publishing"}}
+	store, _ := NewStore(dir)
+	store.Data.Posts = []post{{ID: "p1", Status: "Publishing"}}
 	if err := store.save(store.clone()); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := NewDesignStore(dir)
-	if err != nil || reopened.data.Posts[0].Status != "Failed" {
-		t.Fatalf("status after restart: %v %v", err, reopened.data.Posts)
+	reopened, err := NewStore(dir)
+	if err != nil || reopened.Data.Posts[0].Status != "Failed" {
+		t.Fatalf("status after restart: %v %v", err, reopened.Data.Posts)
 	}
 }
 
@@ -173,11 +175,11 @@ func TestInstagramPublishFlow(t *testing.T) {
 		}
 	}))
 	defer fake.Close()
-	old := Graph
-	Graph = fake.URL + "/"
-	defer func() { Graph = old }()
+	old := instagram.Graph
+	instagram.Graph = fake.URL + "/"
+	defer func() { instagram.Graph = old }()
 	connectInstagram(t)
-	id, err := Publish(context.Background(), []string{"https://img.example.test/a.jpg"}, "caption")
+	id, err := instagram.Publish(context.Background(), []string{"https://img.example.test/a.jpg"}, "caption")
 	if err != nil || id != "999" {
 		t.Fatalf("publish: %q %v", id, err)
 	}
@@ -191,12 +193,12 @@ func TestCarouselPostAndPublish(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		do(mux, "POST", "/api/design/assets?folder=Posts", "image/jpeg", jpegBytes(t))
 	}
-	ids := []string{store.data.Assets[0].ID, store.data.Assets[1].ID}
+	ids := []string{store.Data.Assets[0].ID, store.Data.Assets[1].ID}
 	body := `{"caption":"Swipe","assets":["` + ids[0] + `","` + ids[1] + `"]}`
 	if w := do(mux, "POST", "/api/design/posts", "application/json", []byte(body)); w.Code != http.StatusOK {
 		t.Fatalf("create carousel: %d", w.Code)
 	}
-	if p := store.data.Posts[0]; p.Asset != ids[0] || len(p.Assets) != 2 {
+	if p := store.Data.Posts[0]; p.Asset != ids[0] || len(p.Assets) != 2 {
 		t.Errorf("carousel not stored: %+v", p)
 	}
 	if w := do(mux, "POST", "/api/design/posts", "application/json", []byte(`{"caption":"x","assets":["`+ids[0]+`","nope"]}`)); w.Code != http.StatusBadRequest {
@@ -205,7 +207,7 @@ func TestCarouselPostAndPublish(t *testing.T) {
 	if w := do(mux, "DELETE", "/api/design/assets/"+ids[1], "", nil); w.Code != http.StatusConflict {
 		t.Errorf("delete carousel image in queue: %d", w.Code)
 	}
-	store.data.Posts[0].Status = "Publishing"
+	store.Data.Posts[0].Status = "Publishing"
 	connectInstagram(t)
 	w := httptest.NewRecorder()
 	store.Public(w, httptest.NewRequest("GET", strings.TrimPrefix(store.signedURL(ids[1]), "https://dash.example.test"), nil))
@@ -235,10 +237,10 @@ func TestCarouselPostAndPublish(t *testing.T) {
 		}
 	}))
 	defer fake.Close()
-	old := Graph
-	Graph = fake.URL + "/"
-	defer func() { Graph = old }()
-	id, err := Publish(context.Background(), []string{"https://i.example.test/1.jpg", "https://i.example.test/2.jpg"}, "Swipe")
+	old := instagram.Graph
+	instagram.Graph = fake.URL + "/"
+	defer func() { instagram.Graph = old }()
+	id, err := instagram.Publish(context.Background(), []string{"https://i.example.test/1.jpg", "https://i.example.test/2.jpg"}, "Swipe")
 	if err != nil || id != "999" {
 		t.Fatalf("carousel publish: %q %v", id, err)
 	}

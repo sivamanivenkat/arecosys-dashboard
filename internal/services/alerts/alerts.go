@@ -1,6 +1,11 @@
-package main
+package alerts
 
 import (
+	"arecosys-dashboard/internal/adapters/gmail"
+	"arecosys-dashboard/internal/adapters/upstream"
+	"arecosys-dashboard/internal/platform/httpx"
+	"arecosys-dashboard/internal/services/design"
+	"arecosys-dashboard/internal/services/leads"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -50,8 +55,8 @@ type alertState struct {
 
 // Alerter watches leads and fleet status and tells the team when something needs attention.
 type Alerter struct {
-	store     *LeadStore
-	design    *DesignStore
+	store     *leads.Store
+	design    *design.Store
 	fleet     func(ctx context.Context) ([]fleetFeature, bool)
 	number    func(ctx context.Context, source, field string) (float64, bool)
 	send      func(ctx context.Context, subject, body string) error
@@ -61,13 +66,13 @@ type Alerter struct {
 }
 
 func AlertsConfigured() bool {
-	return os.Getenv("ARECOSYS_ALERT_WEBHOOK_URL") != "" || (os.Getenv("ARECOSYS_ALERT_EMAIL") != "" && Configured())
+	return os.Getenv("ARECOSYS_ALERT_WEBHOOK_URL") != "" || (os.Getenv("ARECOSYS_ALERT_EMAIL") != "" && gmail.Configured())
 }
 
-func NewAlerter(store *LeadStore, design *DesignStore) *Alerter {
+func NewAlerter(store *leads.Store, design *design.Store) *Alerter {
 	a := &Alerter{store: store, design: design, send: sendNotification}
 	a.fleet = func(ctx context.Context) ([]fleetFeature, bool) {
-		result := Fetch(ctx, "fleet", "30")
+		result := upstream.Fetch(ctx, "fleet", "30")
 		data, ok := result.Data.(map[string]json.RawMessage)
 		if result.State != "live" || !ok {
 			return nil, false
@@ -79,7 +84,7 @@ func NewAlerter(store *LeadStore, design *DesignStore) *Alerter {
 		return features, true
 	}
 	a.number = func(ctx context.Context, name, field string) (float64, bool) {
-		result := Fetch(ctx, name, "7")
+		result := upstream.Fetch(ctx, name, "7")
 		data, ok := result.Data.(map[string]json.RawMessage)
 		if result.State != "live" || !ok {
 			return 0, false
@@ -208,13 +213,13 @@ func (a *Alerter) weeklyReport(ctx context.Context, now time.Time) {
 	}
 	if a.design != nil && a.design.Dir != "" {
 		published := 0
-		a.design.mu.Lock()
-		for _, p := range a.design.data.Posts {
+		a.design.Mu.Lock()
+		for _, p := range a.design.Data.Posts {
 			if at, err := time.Parse(time.RFC3339, p.PublishedAt); err == nil && p.Status == "Published" && now.Sub(at) < 7*24*time.Hour {
 				published++
 			}
 		}
-		a.design.mu.Unlock()
+		a.design.Mu.Unlock()
 		fmt.Fprintf(&out, "Instagram posts published this week: %d.\n", published)
 	}
 	if features, ok := a.fleet(ctx); ok {
@@ -244,7 +249,7 @@ func (a *Alerter) weeklyReport(ctx context.Context, now time.Time) {
 // when configured, to a webhook. It fails only if every configured channel fails.
 func sendNotification(ctx context.Context, subject, body string) error {
 	var failures, attempts int
-	if to := os.Getenv("ARECOSYS_ALERT_EMAIL"); to != "" && Configured() {
+	if to := os.Getenv("ARECOSYS_ALERT_EMAIL"); to != "" && gmail.Configured() {
 		attempts++
 		if err := gmailSend(ctx, to, subject, body); err != nil {
 			failures++
@@ -273,7 +278,7 @@ func postWebhook(ctx context.Context, address, text string) error {
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	return RequestJSON(request, nil)
+	return httpx.RequestJSON(request, nil)
 }
 
 func gmailSend(ctx context.Context, to, subject, body string) error {
@@ -281,12 +286,12 @@ func gmailSend(ctx context.Context, to, subject, body string) error {
 	if err != nil {
 		return err
 	}
-	token, err := Token(ctx)
+	token, err := gmail.Token(ctx)
 	if err != nil {
 		return err
 	}
 	var profile struct{ EmailAddress string }
-	if err := Request(ctx, token, http.MethodGet, "profile", "", &profile); err != nil {
+	if err := gmail.Request(ctx, token, http.MethodGet, "profile", "", &profile); err != nil {
 		return err
 	}
 	sender, err := mail.ParseAddress(profile.EmailAddress)
@@ -303,5 +308,5 @@ func gmailSend(ctx context.Context, to, subject, body string) error {
 	subject = strings.NewReplacer("\r", " ", "\n", " ").Replace(subject)
 	raw := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s", sender.String(), recipient.String(), mime.QEncoding.Encode("UTF-8", subject), lines.String())
 	payload, _ := json.Marshal(map[string]string{"raw": base64.RawURLEncoding.EncodeToString([]byte(raw))})
-	return Request(ctx, token, http.MethodPost, "messages/send", string(payload), nil)
+	return gmail.Request(ctx, token, http.MethodPost, "messages/send", string(payload), nil)
 }

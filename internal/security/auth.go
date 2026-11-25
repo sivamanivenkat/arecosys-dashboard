@@ -1,6 +1,7 @@
-package main
+package security
 
 import (
+	"arecosys-dashboard/internal/platform/httpx"
 	"bufio"
 	"bytes"
 	"context"
@@ -289,7 +290,7 @@ func (l *AuditLog) List(w http.ResponseWriter, r *http.Request) {
 		out[len(out)-1-i] = entry
 	}
 	l.mu.Unlock()
-	JSONResponse(w, out)
+	httpx.JSONResponse(w, out)
 }
 
 type StatusWriter struct {
@@ -306,7 +307,7 @@ func (s *StatusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 func Me(w http.ResponseWriter, r *http.Request) {
 	acc := CurrentAccount(r)
-	JSONResponse(w, Account{Name: acc.Name, Role: acc.Role})
+	httpx.JSONResponse(w, Account{Name: acc.Name, Role: acc.Role})
 }
 
 // HashPasswordCommand implements `dashboard hash-password`: it reads a password from

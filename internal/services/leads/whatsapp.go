@@ -1,6 +1,8 @@
-package main
+package leads
 
 import (
+	"arecosys-dashboard/internal/domain"
+	"arecosys-dashboard/internal/security"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -43,14 +45,14 @@ func WhatsAppConfigured() bool {
 
 // WhatsApp handles the WhatsApp Cloud API webhook. GET answers Meta's verification
 // handshake. POST must carry a valid X-Hub-Signature-256 over the raw body.
-func (s *LeadStore) WhatsApp(w http.ResponseWriter, r *http.Request) {
+func (s *Store) WhatsApp(w http.ResponseWriter, r *http.Request) {
 	if s.Path == "" || !WhatsAppConfigured() {
 		http.NotFound(w, r)
 		return
 	}
 	if r.Method == http.MethodGet {
 		query := r.URL.Query()
-		if query.Get("hub.mode") == "subscribe" && Same(query.Get("hub.verify_token"), os.Getenv("ARECOSYS_WHATSAPP_VERIFY_TOKEN")) {
+		if query.Get("hub.mode") == "subscribe" && security.Same(query.Get("hub.verify_token"), os.Getenv("ARECOSYS_WHATSAPP_VERIFY_TOKEN")) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			io.WriteString(w, query.Get("hub.challenge"))
 			return
@@ -101,7 +103,7 @@ func (s *LeadStore) WhatsApp(w http.ResponseWriter, r *http.Request) {
 
 // whatsappMessage adds a message to the sender's open lead, or opens a new lead. Meta
 // retries deliveries, so a message ID that was already recorded is ignored.
-func (s *LeadStore) whatsappMessage(from, name, messageID, text string) error {
+func (s *Store) whatsappMessage(from, name, messageID, text string) error {
 	phone := "+" + from
 	if !phonePattern.MatchString(phone) || messageID == "" || len(messageID) > 160 {
 		return nil
@@ -112,7 +114,7 @@ func (s *LeadStore) whatsappMessage(from, name, messageID, text string) error {
 	now := time.Now().Format(time.RFC3339)
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
-	rows := append([]Lead{}, s.Rows...)
+	rows := append([]domain.Lead{}, s.Rows...)
 	for i, row := range rows {
 		for _, entry := range row.Activity {
 			if entry.Ref == messageID {
@@ -120,14 +122,14 @@ func (s *LeadStore) whatsappMessage(from, name, messageID, text string) error {
 			}
 		}
 		if row.Phone == phone && row.Status != "Closed" {
-			rows[i].Activity = append(append([]Activity{}, row.Activity...), Activity{At: now, By: "WhatsApp", Text: text, Ref: messageID})
+			rows[i].Activity = append(append([]domain.Activity{}, row.Activity...), domain.Activity{At: now, By: "WhatsApp", Text: text, Ref: messageID})
 			return s.save(rows)
 		}
 	}
 	if name == "" {
 		name = phone
 	}
-	item := Lead{ID: "wa-" + messageID, Name: name, Phone: phone, Source: "WhatsApp", Status: "New", Note: text, Created: now,
-		Activity: []Activity{{At: now, By: "system", Text: "Received via WhatsApp", Ref: messageID}}}
-	return s.save(append([]Lead{item}, rows...))
+	item := domain.Lead{ID: "wa-" + messageID, Name: name, Phone: phone, Source: "WhatsApp", Status: "New", Note: text, Created: now,
+		Activity: []domain.Activity{{At: now, By: "system", Text: "Received via WhatsApp", Ref: messageID}}}
+	return s.save(append([]domain.Lead{item}, rows...))
 }

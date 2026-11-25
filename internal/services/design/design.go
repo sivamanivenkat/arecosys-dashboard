@@ -1,6 +1,9 @@
-package main
+package design
 
 import (
+	"arecosys-dashboard/internal/adapters/instagram"
+	"arecosys-dashboard/internal/platform/httpx"
+	"arecosys-dashboard/internal/security"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -59,24 +62,24 @@ type designData struct {
 	Posts   []post   `json:"posts"`
 }
 
-// DesignStore keeps the design library and the Instagram post queue in ARECOSYS_MEDIA_DIR.
+// Store keeps the design library and the Instagram post queue in ARECOSYS_MEDIA_DIR.
 // Like the lead store it is meant for a single server instance.
-type DesignStore struct {
-	mu   sync.Mutex
+type Store struct {
+	Mu   sync.Mutex
 	Dir  string
 	key  []byte
-	data designData
+	Data designData
 }
 
 var imageExts = map[string]string{"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
-func NewDesignStore(dir string) (*DesignStore, error) {
+func NewStore(dir string) (*Store, error) {
 	// The signing key only needs to outlive a 15 minute link, so a fresh one per start is fine.
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
-	store := &DesignStore{Dir: dir, key: key, data: designData{Folders: []string{"Brand", "Posts"}, Assets: []asset{}, Posts: []post{}}}
+	store := &Store{Dir: dir, key: key, Data: designData{Folders: []string{"Brand", "Posts"}, Assets: []asset{}, Posts: []post{}}}
 	if dir == "" {
 		return store, nil
 	}
@@ -86,7 +89,7 @@ func NewDesignStore(dir string) (*DesignStore, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, "design.json"))
 	switch {
 	case err == nil:
-		if err := json.Unmarshal(raw, &store.data); err != nil {
+		if err := json.Unmarshal(raw, &store.Data); err != nil {
 			return nil, errors.New("invalid design storage file")
 		}
 	case !os.IsNotExist(err):
@@ -95,10 +98,10 @@ func NewDesignStore(dir string) (*DesignStore, error) {
 	// A post left in Publishing by a crash may or may not have reached Instagram. Do not
 	// retry it automatically, because that could post it twice.
 	changed := false
-	for i := range store.data.Posts {
-		if store.data.Posts[i].Status == "Publishing" {
-			store.data.Posts[i].Status = "Failed"
-			store.data.Posts[i].Error = "Publishing was interrupted. Check Instagram before retrying."
+	for i := range store.Data.Posts {
+		if store.Data.Posts[i].Status == "Publishing" {
+			store.Data.Posts[i].Status = "Failed"
+			store.Data.Posts[i].Error = "Publishing was interrupted. Check Instagram before retrying."
 			changed = true
 		}
 	}
@@ -110,11 +113,11 @@ func NewDesignStore(dir string) (*DesignStore, error) {
 	return store, nil
 }
 
-func (d *DesignStore) clone() designData {
-	return designData{slices.Clone(d.data.Folders), slices.Clone(d.data.Assets), slices.Clone(d.data.Posts)}
+func (d *Store) clone() designData {
+	return designData{slices.Clone(d.Data.Folders), slices.Clone(d.Data.Assets), slices.Clone(d.Data.Posts)}
 }
 
-func (d *DesignStore) save(next designData) error {
+func (d *Store) save(next designData) error {
 	raw, err := json.Marshal(next)
 	if err != nil {
 		return err
@@ -131,11 +134,11 @@ func (d *DesignStore) save(next designData) error {
 	if err := os.Rename(temp.Name(), filepath.Join(d.Dir, "design.json")); err != nil {
 		return err
 	}
-	d.data = next
+	d.Data = next
 	return nil
 }
 
-func (d *DesignStore) enabled(w http.ResponseWriter, r *http.Request) bool {
+func (d *Store) enabled(w http.ResponseWriter, r *http.Request) bool {
 	if d.Dir == "" {
 		http.NotFound(w, r)
 		return false
@@ -143,8 +146,8 @@ func (d *DesignStore) enabled(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func (d *DesignStore) findAsset(id string) (asset, bool) {
-	for _, a := range d.data.Assets {
+func (d *Store) findAsset(id string) (asset, bool) {
+	for _, a := range d.Data.Assets {
 		if a.ID == id {
 			return a, true
 		}
@@ -152,7 +155,7 @@ func (d *DesignStore) findAsset(id string) (asset, bool) {
 	return asset{}, false
 }
 
-func (d *DesignStore) path(a asset) string { return filepath.Join(d.Dir, "files", a.ID+a.Ext) }
+func (d *Store) path(a asset) string { return filepath.Join(d.Dir, "files", a.ID+a.Ext) }
 
 func validCaption(caption string) bool {
 	if len([]rune(caption)) > 2200 {
@@ -167,25 +170,25 @@ func validCaption(caption string) bool {
 	return tags <= 30
 }
 
-func (d *DesignStore) list(w http.ResponseWriter, r *http.Request) {
+func (d *Store) list(w http.ResponseWriter, r *http.Request) {
 	if d.Dir == "" {
-		JSONResponse(w, map[string]any{"state": "demo"})
+		httpx.JSONResponse(w, map[string]any{"state": "demo"})
 		return
 	}
-	d.mu.Lock()
+	d.Mu.Lock()
 	data := d.clone()
-	d.mu.Unlock()
-	JSONResponse(w, map[string]any{"state": "live", "data": data, "instagram": Connected()})
+	d.Mu.Unlock()
+	httpx.JSONResponse(w, map[string]any{"state": "live", "data": data, "instagram": instagram.Connected()})
 }
 
-func (d *DesignStore) addFolder(w http.ResponseWriter, r *http.Request) {
+func (d *Store) addFolder(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
 	var item struct {
 		Name string `json:"name"`
 	}
-	if !ReadJSON(w, r, &item) {
+	if !httpx.ReadJSON(w, r, &item) {
 		return
 	}
 	name := strings.TrimSpace(item.Name)
@@ -193,9 +196,9 @@ func (d *DesignStore) addFolder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "folder name must be 1 to 40 characters", http.StatusBadRequest)
 		return
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, existing := range d.data.Folders {
+	d.Mu.Lock()
+	defer d.Mu.Unlock()
+	for _, existing := range d.Data.Folders {
 		if strings.EqualFold(existing, name) {
 			http.Error(w, "folder already exists", http.StatusConflict)
 			return
@@ -210,7 +213,7 @@ func (d *DesignStore) addFolder(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (d *DesignStore) upload(w http.ResponseWriter, r *http.Request) {
+func (d *Store) upload(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
@@ -238,9 +241,9 @@ func (d *DesignStore) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	folder := r.URL.Query().Get("folder")
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if !slices.Contains(d.data.Folders, folder) {
+	d.Mu.Lock()
+	defer d.Mu.Unlock()
+	if !slices.Contains(d.Data.Folders, folder) {
 		http.Error(w, "unknown folder", http.StatusBadRequest)
 		return
 	}
@@ -256,20 +259,20 @@ func (d *DesignStore) upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "image could not be saved", http.StatusInternalServerError)
 		return
 	}
-	JSONResponse(w, item)
+	httpx.JSONResponse(w, item)
 }
 
-func (d *DesignStore) serve(w http.ResponseWriter, r *http.Request) {
+func (d *Store) serve(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
-	d.mu.Lock()
+	d.Mu.Lock()
 	item, ok := d.findAsset(r.PathValue("id"))
-	d.mu.Unlock()
+	d.Mu.Unlock()
 	d.sendFile(w, r, item, ok)
 }
 
-func (d *DesignStore) sendFile(w http.ResponseWriter, r *http.Request, item asset, ok bool) {
+func (d *Store) sendFile(w http.ResponseWriter, r *http.Request, item asset, ok bool) {
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -285,18 +288,18 @@ func (d *DesignStore) sendFile(w http.ResponseWriter, r *http.Request, item asse
 	http.ServeContent(w, r, "", time.Time{}, file)
 }
 
-func (d *DesignStore) deleteAsset(w http.ResponseWriter, r *http.Request) {
+func (d *Store) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.Mu.Lock()
+	defer d.Mu.Unlock()
 	item, ok := d.findAsset(r.PathValue("id"))
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	for _, p := range d.data.Posts {
+	for _, p := range d.Data.Posts {
 		if slices.Contains(p.images(), item.ID) && p.Status != "Published" && p.Status != "Failed" {
 			http.Error(w, "image is used by a post in the queue", http.StatusConflict)
 			return
@@ -312,7 +315,7 @@ func (d *DesignStore) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (d *DesignStore) addPost(w http.ResponseWriter, r *http.Request) {
+func (d *Store) addPost(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
@@ -321,7 +324,7 @@ func (d *DesignStore) addPost(w http.ResponseWriter, r *http.Request) {
 		Asset   string   `json:"asset"`
 		Assets  []string `json:"assets"`
 	}
-	if !ReadJSON(w, r, &item) {
+	if !httpx.ReadJSON(w, r, &item) {
 		return
 	}
 	caption := strings.TrimSpace(item.Caption)
@@ -329,8 +332,8 @@ func (d *DesignStore) addPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "caption must be at most 2200 characters with at most 30 hashtags", http.StatusBadRequest)
 		return
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.Mu.Lock()
+	defer d.Mu.Unlock()
 	ids := item.Assets
 	if len(ids) == 0 && item.Asset != "" {
 		ids = []string{item.Asset}
@@ -352,10 +355,10 @@ func (d *DesignStore) addPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "post could not be saved", http.StatusInternalServerError)
 		return
 	}
-	JSONResponse(w, created)
+	httpx.JSONResponse(w, created)
 }
 
-func (d *DesignStore) updatePost(w http.ResponseWriter, r *http.Request) {
+func (d *Store) updatePost(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
@@ -364,15 +367,15 @@ func (d *DesignStore) updatePost(w http.ResponseWriter, r *http.Request) {
 		Action      string  `json:"action"`
 		ScheduledAt string  `json:"scheduledAt"`
 	}
-	if !ReadJSON(w, r, &item) {
+	if !httpx.ReadJSON(w, r, &item) {
 		return
 	}
 	if item.Caption == nil && item.Action == "" {
 		http.Error(w, "nothing to update", http.StatusBadRequest)
 		return
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.Mu.Lock()
+	defer d.Mu.Unlock()
 	next := d.clone()
 	index := slices.IndexFunc(next.Posts, func(p post) bool { return p.ID == r.PathValue("id") })
 	if index < 0 {
@@ -394,7 +397,7 @@ func (d *DesignStore) updatePost(w http.ResponseWriter, r *http.Request) {
 		p.Caption = caption
 	}
 	publishNow := false
-	if (item.Action == "schedule" || item.Action == "publish") && !RequireAdmin(w, r) {
+	if (item.Action == "schedule" || item.Action == "publish") && !security.RequireAdmin(w, r) {
 		return
 	}
 	switch item.Action {
@@ -416,7 +419,7 @@ func (d *DesignStore) updatePost(w http.ResponseWriter, r *http.Request) {
 			refuse()
 			return
 		}
-		if !Connected() {
+		if !instagram.Connected() {
 			http.Error(w, "Instagram is not connected", http.StatusConflict)
 			return
 		}
@@ -441,15 +444,15 @@ func (d *DesignStore) updatePost(w http.ResponseWriter, r *http.Request) {
 	if publishNow {
 		go d.publish(p.ID)
 	}
-	JSONResponse(w, *p)
+	httpx.JSONResponse(w, *p)
 }
 
-func (d *DesignStore) deletePost(w http.ResponseWriter, r *http.Request) {
+func (d *Store) deletePost(w http.ResponseWriter, r *http.Request) {
 	if !d.enabled(w, r) {
 		return
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.Mu.Lock()
+	defer d.Mu.Unlock()
 	next := d.clone()
 	index := slices.IndexFunc(next.Posts, func(p post) bool { return p.ID == r.PathValue("id") })
 	if index < 0 {
@@ -468,13 +471,13 @@ func (d *DesignStore) deletePost(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (d *DesignStore) sign(id string, expires int64) string {
+func (d *Store) sign(id string, expires int64) string {
 	mac := hmac.New(sha256.New, d.key)
 	fmt.Fprintf(mac, "%s|%d", id, expires)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (d *DesignStore) signedURL(id string) string {
+func (d *Store) signedURL(id string) string {
 	expires := time.Now().Add(15 * time.Minute).Unix()
 	base := strings.TrimRight(os.Getenv("ARECOSYS_PUBLIC_BASE_URL"), "/")
 	return fmt.Sprintf("%s/public/media/%s?exp=%d&sig=%s", base, id, expires, d.sign(id, expires))
@@ -482,7 +485,7 @@ func (d *DesignStore) signedURL(id string) string {
 
 // Public serves the one image Instagram needs to fetch. It needs a valid signature and
 // the image must belong to a post that is publishing right now.
-func (d *DesignStore) Public(w http.ResponseWriter, r *http.Request) {
+func (d *Store) Public(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/public/media/")
 	expires, err := strconv.ParseInt(r.URL.Query().Get("exp"), 10, 64)
 	signature := r.URL.Query().Get("sig")
@@ -490,33 +493,33 @@ func (d *DesignStore) Public(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	d.mu.Lock()
+	d.Mu.Lock()
 	item, ok := d.findAsset(id)
 	if ok {
-		ok = item.Ext == ".jpg" && slices.ContainsFunc(d.data.Posts, func(p post) bool { return p.Status == "Publishing" && slices.Contains(p.images(), id) })
+		ok = item.Ext == ".jpg" && slices.ContainsFunc(d.Data.Posts, func(p post) bool { return p.Status == "Publishing" && slices.Contains(p.images(), id) })
 	}
-	d.mu.Unlock()
+	d.Mu.Unlock()
 	d.sendFile(w, r, item, ok)
 }
 
-func (d *DesignStore) publish(id string) {
-	d.mu.Lock()
+func (d *Store) publish(id string) {
+	d.Mu.Lock()
 	var p post
-	for _, candidate := range d.data.Posts {
+	for _, candidate := range d.Data.Posts {
 		if candidate.ID == id {
 			p = candidate
 		}
 	}
-	d.mu.Unlock()
+	d.Mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	var urls []string
 	for _, id := range p.images() {
 		urls = append(urls, d.signedURL(id))
 	}
-	mediaID, err := Publish(ctx, urls, p.Caption)
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	mediaID, err := instagram.Publish(ctx, urls, p.Caption)
+	d.Mu.Lock()
+	defer d.Mu.Unlock()
 	next := d.clone()
 	for i := range next.Posts {
 		if next.Posts[i].ID != id {
@@ -531,12 +534,12 @@ func (d *DesignStore) publish(id string) {
 	}
 	if saveErr := d.save(next); saveErr != nil {
 		log.Print("post status could not be saved")
-		d.data = next
+		d.Data = next
 	}
 }
 
 // Run publishes scheduled posts when they fall due.
-func (d *DesignStore) Run() {
+func (d *Store) Run() {
 	for range time.Tick(30 * time.Second) {
 		for _, id := range d.claimDue() {
 			go d.publish(id)
@@ -544,12 +547,12 @@ func (d *DesignStore) Run() {
 	}
 }
 
-func (d *DesignStore) claimDue() []string {
-	if !Connected() {
+func (d *Store) claimDue() []string {
+	if !instagram.Connected() {
 		return nil
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.Mu.Lock()
+	defer d.Mu.Unlock()
 	next := d.clone()
 	var due []string
 	for i := range next.Posts {
@@ -570,7 +573,7 @@ func (d *DesignStore) claimDue() []string {
 	return due
 }
 
-func (d *DesignStore) Routes(app *http.ServeMux) {
+func (d *Store) Routes(app *http.ServeMux) {
 	app.HandleFunc("GET /api/design", d.list)
 	app.HandleFunc("POST /api/design/folders", d.addFolder)
 	app.HandleFunc("POST /api/design/assets", d.upload)

@@ -1,6 +1,8 @@
-package main
+package leads
 
 import (
+	"arecosys-dashboard/internal/domain"
+	"arecosys-dashboard/internal/security"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,13 +13,13 @@ import (
 	"testing"
 )
 
-func newStore(t *testing.T) *LeadStore {
+func newStore(t *testing.T) *Store {
 	t.Helper()
 	t.Setenv("ARECOSYS_LEAD_TOKEN", "secret")
-	return &LeadStore{Path: filepath.Join(t.TempDir(), "leads.json"), Rows: []Lead{}}
+	return &Store{Path: filepath.Join(t.TempDir(), "leads.json"), Rows: []domain.Lead{}}
 }
 
-func postLead(store *LeadStore, token, body string) *httptest.ResponseRecorder {
+func postLead(store *Store, token, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, "/api/leads", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	if token != "" {
@@ -118,7 +120,7 @@ func TestLeadTimelineAndPhone(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PATCH /api/leads/{id}", store.Update)
 	patch := func(body string) int {
-		r := WithAccount(httptest.NewRequest(http.MethodPatch, "/api/leads/w1", strings.NewReader(body)), Account{Name: "meera", Role: "editor"})
+		r := security.WithAccount(httptest.NewRequest(http.MethodPatch, "/api/leads/w1", strings.NewReader(body)), security.Account{Name: "meera", Role: "editor"})
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)

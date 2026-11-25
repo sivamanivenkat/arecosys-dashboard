@@ -1,6 +1,8 @@
-package main
+package upstream
 
 import (
+	"arecosys-dashboard/internal/adapters/analytics"
+	"arecosys-dashboard/internal/adapters/instagram"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -66,9 +68,9 @@ func TestGA4Source(t *testing.T) {
 		}
 	}))
 	defer fake.Close()
-	oldToken, oldData := GA4TokenURL, GA4DataURL
-	GA4TokenURL, GA4DataURL = fake.URL+"/token", fake.URL+"/"
-	defer func() { GA4TokenURL, GA4DataURL = oldToken, oldData }()
+	oldToken, oldData := analytics.GA4TokenURL, analytics.GA4DataURL
+	analytics.GA4TokenURL, analytics.GA4DataURL = fake.URL+"/token", fake.URL+"/"
+	defer func() { analytics.GA4TokenURL, analytics.GA4DataURL = oldToken, oldData }()
 
 	result := Fetch(t.Context(), "website", "30")
 	if result.State != "live" {
@@ -88,7 +90,7 @@ func TestGA4Source(t *testing.T) {
 	if channels["organic"] != 42 || channels["direct"] != 30 || channels["social"] != 0 {
 		t.Errorf("channels: %v", channels)
 	}
-	var inquiries []Point
+	var inquiries []analytics.Point
 	get("inquiries", &inquiries)
 	if len(inquiries) != 2 || inquiries[0].Label != "Nov 23" || inquiries[0].Value != 3 || inquiries[1].Value != 5 {
 		t.Errorf("inquiries: %+v", inquiries)
@@ -132,9 +134,9 @@ func TestInstagramInsightsSource(t *testing.T) {
 		}
 	}))
 	defer fake.Close()
-	old := Graph
-	Graph = fake.URL + "/"
-	defer func() { Graph = old }()
+	old := instagram.Graph
+	instagram.Graph = fake.URL + "/"
+	defer func() { instagram.Graph = old }()
 
 	read := func(days string) map[string]any {
 		result := Fetch(t.Context(), "instagram", days)

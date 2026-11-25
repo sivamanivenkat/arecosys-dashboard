@@ -1,6 +1,9 @@
-package main
+package analytics
 
 import (
+	"arecosys-dashboard/internal/adapters/instagram"
+	"arecosys-dashboard/internal/domain"
+	"arecosys-dashboard/internal/platform/httpx"
 	"bytes"
 	"context"
 	"crypto"
@@ -37,7 +40,7 @@ func GA4Configured() bool {
 }
 
 func InsightsConfigured() bool {
-	return os.Getenv("ARECOSYS_INSTAGRAM_INSIGHTS") == "1" && Numeric.MatchString(os.Getenv("ARECOSYS_INSTAGRAM_USER_ID")) && os.Getenv("ARECOSYS_INSTAGRAM_ACCESS_TOKEN") != ""
+	return os.Getenv("ARECOSYS_INSTAGRAM_INSIGHTS") == "1" && instagram.Numeric.MatchString(os.Getenv("ARECOSYS_INSTAGRAM_USER_ID")) && os.Getenv("ARECOSYS_INSTAGRAM_ACCESS_TOKEN") != ""
 }
 
 func rawMap(values map[string]any) map[string]json.RawMessage {
@@ -106,7 +109,7 @@ func ga4Token(ctx context.Context) (string, error) {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int    `json:"expires_in"`
 	}
-	if err := RequestJSON(request, &result); err != nil || result.AccessToken == "" {
+	if err := httpx.RequestJSON(request, &result); err != nil || result.AccessToken == "" {
 		return "", errors.New("Google rejected the service account")
 	}
 	ga4Cache.token = result.AccessToken
@@ -136,10 +139,10 @@ func (r ga4Report) dimension(row, index int) string {
 	return r.Rows[row].DimensionValues[index].Value
 }
 
-func GA4Source(ctx context.Context, days string) Source {
+func GA4Source(ctx context.Context, days string) domain.Source {
 	token, err := ga4Token(ctx)
 	if err != nil {
-		return Source{State: "error"}
+		return domain.Source{State: "error"}
 	}
 	leadEvent := os.Getenv("ARECOSYS_GA4_LEAD_EVENT")
 	if leadEvent == "" {
@@ -152,7 +155,7 @@ func GA4Source(ctx context.Context, days string) Source {
 		}
 	}
 	if !ga4EventRe.MatchString(leadEvent) {
-		return Source{State: "error"}
+		return domain.Source{State: "error"}
 	}
 	rng := []map[string]string{{"startDate": days + "daysAgo", "endDate": "today"}}
 	byDate := []map[string]any{{"dimension": map[string]string{"dimensionName": "date"}}}
@@ -166,15 +169,15 @@ func GA4Source(ctx context.Context, days string) Source {
 	body, _ := json.Marshal(map[string]any{"requests": requests})
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, GA4DataURL+"properties/"+os.Getenv("ARECOSYS_GA4_PROPERTY_ID")+":batchRunReports", bytes.NewReader(body))
 	if err != nil {
-		return Source{State: "error"}
+		return domain.Source{State: "error"}
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Content-Type", "application/json")
 	var result struct {
 		Reports []ga4Report `json:"reports"`
 	}
-	if err := RequestJSON(request, &result); err != nil || len(result.Reports) != 5 {
-		return Source{State: "error"}
+	if err := httpx.RequestJSON(request, &result); err != nil || len(result.Reports) != 5 {
+		return domain.Source{State: "error"}
 	}
 	totals, daily, channelRows, pageRows, eventRows := result.Reports[0], result.Reports[1], result.Reports[2], result.Reports[3], result.Reports[4]
 	label := func(date string) string {
@@ -225,7 +228,7 @@ func GA4Source(ctx context.Context, days string) Source {
 		}
 		pages = append(pages, map[string]any{"name": name, "path": pageRows.dimension(i, 0), "views": pageRows.number(i, 0)})
 	}
-	return Source{State: "live", Data: rawMap(map[string]any{"sessions": sessions, "pageviews": totals.number(0, 1), "leads": leads, "traffic": traffic, "inquiries": inquiries, "channels": shares, "pages": pages, "actions": actions})}
+	return domain.Source{State: "live", Data: rawMap(map[string]any{"sessions": sessions, "pageviews": totals.number(0, 1), "leads": leads, "traffic": traffic, "inquiries": inquiries, "channels": shares, "pages": pages, "actions": actions})}
 }
 
 type igSeries struct {
@@ -243,7 +246,7 @@ type igSeries struct {
 
 // InsightsSource builds the Instagram source from the Insights API. Unique reach for
 // a whole period comes from the API's period total, never from summing daily reach.
-func InsightsSource(ctx context.Context, days string) Source {
+func InsightsSource(ctx context.Context, days string) domain.Source {
 	count, _ := strconv.Atoi(days)
 	user := os.Getenv("ARECOSYS_INSTAGRAM_USER_ID")
 	end := time.Now()
@@ -255,8 +258,8 @@ func InsightsSource(ctx context.Context, days string) Source {
 		}
 		var chunk igSeries
 		values := url.Values{"metric": {"reach"}, "period": {"day"}, "since": {strconv.FormatInt(chunkStart.Unix(), 10)}, "until": {strconv.FormatInt(chunkEnd.Unix(), 10)}}
-		if err := Call(ctx, http.MethodGet, user+"/insights", values, &chunk); err != nil {
-			return Source{State: "error"}
+		if err := instagram.Call(ctx, http.MethodGet, user+"/insights", values, &chunk); err != nil {
+			return domain.Source{State: "error"}
 		}
 		part := []Point{}
 		for _, metric := range chunk.Data {
@@ -274,9 +277,9 @@ func InsightsSource(ctx context.Context, days string) Source {
 	out := map[string]any{"reach": nil, "engagements": nil, "profileVisits": nil, "followers": nil, "series": series}
 	var totals igSeries
 	values := url.Values{"metric": {"reach,total_interactions,profile_views"}, "metric_type": {"total_value"}, "period": {"day"}, "since": {strconv.FormatInt(end.AddDate(0, 0, -count).Unix(), 10)}, "until": {strconv.FormatInt(end.Unix(), 10)}}
-	if err := Call(ctx, http.MethodGet, user+"/insights", values, &totals); err != nil {
+	if err := instagram.Call(ctx, http.MethodGet, user+"/insights", values, &totals); err != nil {
 		if count <= 30 {
-			return Source{State: "error"}
+			return domain.Source{State: "error"}
 		} // Long periods may be refused for period totals. Leave them empty rather than guess.
 	} else {
 		for _, metric := range totals.Data {
@@ -293,8 +296,8 @@ func InsightsSource(ctx context.Context, days string) Source {
 	var profile struct {
 		Followers *float64 `json:"followers_count"`
 	}
-	if err := Call(ctx, http.MethodGet, user, url.Values{"fields": {"followers_count"}}, &profile); err == nil && profile.Followers != nil {
+	if err := instagram.Call(ctx, http.MethodGet, user, url.Values{"fields": {"followers_count"}}, &profile); err == nil && profile.Followers != nil {
 		out["followers"] = *profile.Followers
 	}
-	return Source{State: "live", Data: rawMap(out)}
+	return domain.Source{State: "live", Data: rawMap(out)}
 }
