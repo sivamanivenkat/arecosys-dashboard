@@ -1,11 +1,11 @@
 # AR ECOSYS operations dashboard
 
-Open `index.html` for the interactive sample dashboard. The range selector changes the website and Instagram samples. The fleet and lead examples are a fixed snapshot. Sample lead stage changes and sample email replies last for the current tab session.
+Open `web/index.html` for the interactive sample dashboard. The range selector changes the website and Instagram samples. The fleet and lead examples are a fixed snapshot. Sample lead stage changes and sample email replies last for the current tab session.
 
 Run the local data server from this directory with Go 1.24 or later.
 
 ```powershell
-go run server.go gmail.go
+go run ./cmd/dashboard
 ```
 
 Open `http://127.0.0.1:8765`. The server listens on loopback. When enabling any private connection, set `ARECOSYS_DASHBOARD_PASSWORD` in the server environment before starting. Sign in as `arecosys`. Keep credentials out of the source tree and use an authenticated HTTPS deployment to share the dashboard with a team.
@@ -58,7 +58,7 @@ By default one shared password (``ARECOSYS_DASHBOARD_PASSWORD``, user ``arecosys
 ]
 ```
 
-Create each hash with ``go run . hash-password`` and type the password when prompted (at least 10 characters). Run it interactively: piping a password in from Windows PowerShell 5.1 does not reach the program intact. Roles:
+Create each hash with ``go run ./cmd/dashboard hash-password`` and type the password when prompted (at least 10 characters). Run it interactively: piping a password in from Windows PowerShell 5.1 does not reach the program intact. Roles:
 
 - **viewer** can read everything and change nothing.
 - **editor** can also update leads, add notes, upload images and draft or approve posts.

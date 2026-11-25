@@ -1,8 +1,10 @@
 FROM golang:1.24-alpine AS build
 WORKDIR /src
 COPY go.mod ./
-COPY *.go index.html styles.css design.js dashboard.js logo.png ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /dashboard . && mkdir -p /out/data/media
+COPY cmd cmd
+COPY internal internal
+COPY web web
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /dashboard ./cmd/dashboard && mkdir -p /out/data/media
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /dashboard /dashboard

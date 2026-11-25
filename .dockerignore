@@ -1,4 +1,4 @@
 .env
 .git
-*_test.go
+**/*_test.go
 README.md
